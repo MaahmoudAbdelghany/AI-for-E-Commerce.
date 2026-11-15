@@ -66,7 +66,7 @@ Four parallel read-only review lenses (`#49` Security & Governance, `#51` Archit
 - **Drift found and fixed**: All High, Medium, and targeted Low spec/code/test drift items (`ScoringConfig.top_k` `1..3` parity, `NFR1` latency wording, `T5.4` lock command, `PI.2`/`T4.1`/`T5.2` counts, JSON Google Shopping attribution context, `InMemoryTTLCache` bounded LRU) are resolved; `spec/sdd-profile.md` backend `(unverified)` command tags are `accepted` for Step 9 (`sdd-replan` Mode D).
 
 ## 5. Verdict
-- **Status**: `APPROVED-PENDING-HUMAN`
+- **Status**: `APPROVED` (Phase Gate 2 approved by human)
 - **Branch**: `phase/1-core-foundation`
 - **Local commits**: `1b58d86..da37e4a` (`1b58d86`, `1e01310`, `9c4ddf6`, `5ce592a`, `84c4821`, `da37e4a`) + upcoming review/backlog documentation commit (`docs(review): finalize Phase 1 review report and backlog follow-ups`)
-- **Next step**: Phase Gate 2 — waiting for human approval before updating `CHANGELOG.md`, pushing `phase/1-core-foundation`, merging to `main`, and running `sdd-replan` Mode D (phase close & `spec/sdd-profile.md` command confirmation).
+- **Next step**: Phase Gate 2 approved — commit `CHANGELOG.md` and Phase 1 status updates, push `phase/1-core-foundation`, merge (`--no-ff`) to `main`, and run Step 9 phase close (`sdd-replan` Mode D & `spec/sdd-profile.md` command confirmation).

@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/1-core-foundation`
 - **Roadmap section**: `spec/roadmap.md` → Phase 1
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 1)
-- **Status**: Validated
+- **Status**: Merged
 
 ---
 
