@@ -1,0 +1,529 @@
+{
+  "version": "1.0.0",
+  "country": "SA",
+  "currency": "SAR",
+  "items": [
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth",
+        "wireless"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-anker-l4nc",
+        "title": "سماعة بلوتوث أنكر ساوندكور ليبرتي 4 NC عازلة للضوضاء - Anker Soundcore Liberty 4 NC Earbuds",
+        "price": "279.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-ar/anker-soundcore-liberty-4-nc-earbuds/N80010001A/p/",
+        "rating": 4.7,
+        "review_count": 640,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80010001A/45/_/anker-l4nc-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth",
+        "wireless"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-anker-r50i",
+        "title": "سماعة أذن لاسلكية بلوتوث أنكر ساوندكور R50i - Anker Soundcore R50i True Wireless Earbuds",
+        "price": "89.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0C3ANKSA1",
+        "rating": 4.6,
+        "review_count": 910,
+        "image_url": "https://m.media-amazon.com/images/I/61ankerR50iSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth",
+        "wireless"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-anker-a40",
+        "title": "سماعة بلوتوث أنكر ساوندكور سبيس A40 - Anker Soundcore Space A40 Adaptive ANC Earbuds",
+        "price": "319.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0B1LVC5SA",
+        "rating": 4.8,
+        "review_count": 460,
+        "image_url": "https://m.media-amazon.com/images/I/61ankerA40SA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-anker-5star-1rev-trap",
+        "title": "سماعة بلوتوث أنكر ساوندكور لايف نوت 3i - Anker Soundcore Life Note 3i Earbuds",
+        "price": "189.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-en/anker-soundcore-life-note-3i/N80010002A/p/",
+        "rating": 5.0,
+        "review_count": 1,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80010002A/45/_/anker-3i-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-anker-unrated-trap",
+        "title": "سماعة بلوتوث أنكر ساوندكور K20i - Anker Soundcore K20i Wireless Earbuds",
+        "price": "69.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0D4K20ISA",
+        "rating": null,
+        "review_count": 0,
+        "image_url": "https://m.media-amazon.com/images/I/51ankerK20iSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "جراب",
+        "كفر",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "case"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-anker-case-trap",
+        "title": "كفر حماية سيليكون لسماعة بلوتوث أنكر ساوندكور - Anker Soundcore Earbuds Silicone Case",
+        "price": "25.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-ar/silicone-case-anker-soundcore/N80010003A/p/",
+        "rating": 4.5,
+        "review_count": 280,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80010003A/45/_/anker-case-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Anker",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أنكر",
+        "ساوندكور",
+        "anker",
+        "soundcore",
+        "earbuds",
+        "bluetooth"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-anker-scalper-trap",
+        "title": "سماعة بلوتوث أنكر ساوندكور ليبرتي 4 برو إصدار مستورد - Anker Soundcore Liberty 4 Pro Earbuds",
+        "price": "1399.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0DSCALPSA",
+        "rating": 4.6,
+        "review_count": 28,
+        "image_url": "https://m.media-amazon.com/images/I/71ankerL4ProSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "earbuds_audio",
+      "brand": "Apple",
+      "keywords": [
+        "سماعة",
+        "سماعات",
+        "بلوتوث",
+        "أبل",
+        "إيربودز",
+        "apple",
+        "airpods",
+        "earbuds",
+        "bluetooth"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-airpods-pro-2",
+        "title": "سماعة أبل إيربودز برو الجيل الثاني بلوتوث - Apple AirPods Pro 2nd Gen USB-C",
+        "price": "899.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-en/apple-airpods-pro-2nd-gen/N80010004A/p/",
+        "rating": 4.9,
+        "review_count": 820,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80010004A/45/_/airpods-pro2-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartphones",
+      "brand": "Apple",
+      "keywords": [
+        "جوال",
+        "هاتف",
+        "آيفون",
+        "ايفون",
+        "15",
+        "أبل",
+        "iphone",
+        "apple",
+        "smartphone"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-iphone15-128",
+        "title": "جوال أبل آيفون 15 سعة 128 جيجابايت 5G - Apple iPhone 15 128GB",
+        "price": "3199.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CHX2F5SA",
+        "rating": 4.8,
+        "review_count": 615,
+        "image_url": "https://m.media-amazon.com/images/I/71iphone15SA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartphones",
+      "brand": "Samsung",
+      "keywords": [
+        "جوال",
+        "هاتف",
+        "سامسونج",
+        "جالكسي",
+        "samsung",
+        "galaxy",
+        "a55",
+        "smartphone"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-samsung-a55",
+        "title": "جوال سامسونج جالكسي A55 5G سعة 256 جيجابايت - Samsung Galaxy A55 5G",
+        "price": "1449.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-en/samsung-galaxy-a55-5g/N80020002A/p/",
+        "rating": 4.6,
+        "review_count": 350,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80020002A/45/_/galaxy-a55-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartphones",
+      "brand": "Apple",
+      "keywords": [
+        "آيفون",
+        "ايفون",
+        "15",
+        "حماية شاشة",
+        "اسكرينة",
+        "iphone",
+        "screen",
+        "protector"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-iphone15-protector-trap",
+        "title": "حماية شاشة زجاج مقوى آيفون 15 - iPhone 15 Tempered Glass Screen Protector",
+        "price": "29.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CIP15PROSA",
+        "rating": 4.4,
+        "review_count": 230,
+        "image_url": "https://m.media-amazon.com/images/I/61glassSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "laptops_tablets",
+      "brand": "Lenovo",
+      "keywords": [
+        "لابتوب",
+        "كمبيوتر",
+        "لينوفو",
+        "laptop",
+        "laptops",
+        "lenovo",
+        "ideapad"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-lenovo-ideapad",
+        "title": "لابتوب لينوفو أيديا باد سليم 3 كور i5 رام 16 جيجا - Lenovo IdeaPad Slim 3 Laptop",
+        "price": "2099.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CLENOVSL3SA",
+        "rating": 4.5,
+        "review_count": 195,
+        "image_url": "https://m.media-amazon.com/images/I/71lenovoSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "laptops_tablets",
+      "brand": "Apple",
+      "keywords": [
+        "لابتوب",
+        "ماك بوك",
+        "أبل",
+        "laptop",
+        "laptops",
+        "macbook",
+        "apple"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-macbook-air-m2",
+        "title": "لابتوب أبل ماك بوك إير 13 بوصة شريحة M2 - Apple MacBook Air M2 Laptop",
+        "price": "3899.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-en/apple-macbook-air-m2/N80030001A/p/",
+        "rating": 4.9,
+        "review_count": 430,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80030001A/45/_/macbook-m2-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "laptops_tablets",
+      "brand": "Anker",
+      "keywords": [
+        "لابتوب",
+        "شاحن",
+        "كابل",
+        "laptop",
+        "charger",
+        "cable"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-laptop-charger-trap",
+        "title": "شاحن وكابل شحن سريع 65 واط لابتوب - 65W USB-C Laptop Fast Charger Cable",
+        "price": "99.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-ar/65w-laptop-charger-cable/N80030002A/p/",
+        "rating": 4.6,
+        "review_count": 160,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80030002A/45/_/charger65w-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartwatches",
+      "brand": "Apple",
+      "keywords": [
+        "ساعة",
+        "ساعة ذكية",
+        "أبل",
+        "واتش",
+        "smartwatch",
+        "smartwatches",
+        "apple",
+        "watch"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-apple-watch-s9",
+        "title": "ساعة ذكية أبل واتش سيريس 9 مقاس 41 مم - Apple Watch Series 9 GPS Smartwatch",
+        "price": "1549.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-en/apple-watch-series-9/N80040001A/p/",
+        "rating": 4.8,
+        "review_count": 340,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80040001A/45/_/watch-s9-sa.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartwatches",
+      "brand": "Huawei",
+      "keywords": [
+        "ساعة",
+        "ساعة ذكية",
+        "هواوي",
+        "smartwatch",
+        "smartwatches",
+        "huawei",
+        "watch"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-huawei-gt4",
+        "title": "ساعة ذكية هواوي واتش GT 4 مقاس 46 مم - Huawei Watch GT 4 Smartwatch",
+        "price": "799.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CHUAWEISA4",
+        "rating": 4.7,
+        "review_count": 290,
+        "image_url": "https://m.media-amazon.com/images/I/61gt4SA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "smartwatches",
+      "brand": "Apple",
+      "keywords": [
+        "ساعة",
+        "ساعة ذكية",
+        "سوار",
+        "أبل",
+        "smartwatch",
+        "apple",
+        "watch",
+        "strap"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-watch-strap-trap",
+        "title": "سوار سيليكون رياضي ساعة ذكية أبل واتش - Apple Watch Silicone Strap",
+        "price": "29.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CAWSTRAPS1",
+        "rating": 4.5,
+        "review_count": 175,
+        "image_url": "https://m.media-amazon.com/images/I/51strapSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "home_appliances",
+      "brand": "Philips",
+      "keywords": [
+        "قلاية",
+        "قلاية هوائية",
+        "فيليبس",
+        "أجهزة منزلية",
+        "air fryer",
+        "philips",
+        "home",
+        "appliances"
+      ],
+      "offer": {
+        "offer_id": "sa-amazon-philips-airfryer",
+        "title": "قلاية هوائية فيليبس إسنشال XL سعة 6.2 لتر - Philips Essential Air Fryer XL",
+        "price": "549.00",
+        "currency": "SAR",
+        "store": "amazon",
+        "country": "SA",
+        "url": "https://www.amazon.sa/dp/B0CPHILAFSA",
+        "rating": 4.7,
+        "review_count": 560,
+        "image_url": "https://m.media-amazon.com/images/I/61philipsAFSA.jpg",
+        "in_stock": true
+      }
+    },
+    {
+      "category": "home_appliances",
+      "brand": "Ninja",
+      "keywords": [
+        "قلاية",
+        "قلاية هوائية",
+        "نينجا",
+        "أجهزة منزلية",
+        "air fryer",
+        "ninja",
+        "home",
+        "appliances"
+      ],
+      "offer": {
+        "offer_id": "sa-noon-ninja-airfryer",
+        "title": "قلاية هوائية نينجا فودي بحوضين 7.6 لتر - Ninja Foodi Dual Zone Air Fryer",
+        "price": "799.00",
+        "currency": "SAR",
+        "store": "noon",
+        "country": "SA",
+        "url": "https://www.noon.com/saudi-ar/ninja-foodi-dual-zone-air-fryer/N80050001A/p/",
+        "rating": 4.8,
+        "review_count": 325,
+        "image_url": "https://f.nooncdn.com/p/pnsku/N80050001A/45/_/ninja-af-sa.jpg",
+        "in_stock": true
+      }
+    }
+  ]
+}
