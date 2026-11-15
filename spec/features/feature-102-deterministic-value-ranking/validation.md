@@ -55,11 +55,11 @@ Feature 1.2 is completely proven successful when `backend/src/commerce_ai/domain
 - [x] T3.7 — **Offline Determinism & Latency Budget (`INV-07`, `NFR1`)**: Ranking `100` mixed offers runs 100% offline with zero env vars or sockets in `< 2 ms` typical (`< 50 ms` CI wall-clock assertion ceiling to avoid tracing flakiness) (`tests/unit/test_ranking.py::test_offline_determinism_and_performance_budget`)
 
 ### Tier 4: Regression Checks
-- [x] T4.1 — Full backend suite passes 100% offline (`INV-07`): `uv run --directory backend pytest -v` *(confirmed independently by `verifier` / `coordinator`: `63 passed in 1.27s`)*
+- [x] T4.1 — Full backend suite passes 100% offline (`INV-07`): `uv run --directory backend pytest -v` *(confirmed independently by `verifier` / `coordinator`: `80 passed`)*
 
 ### Tier 5: Build, Lint & Type Checks
 - [x] T5.1 — Lint clean: `uv run --directory backend ruff check .` *(scoped Feature 1.2 check + full-repo `ruff check .` confirmed clean)*
-- [x] T5.2 — Format check clean: `uv run --directory backend ruff format --check .` *(scoped Feature 1.2 check + full-repo `29 files already formatted` confirmed clean)*
+- [x] T5.2 — Format check clean: `uv run --directory backend ruff format --check .` *(scoped Feature 1.2 check + full-repo `30 files already formatted` confirmed clean)*
 - [x] T5.3 — Strict type check clean: `uv run --directory backend mypy src` *(scoped Feature 1.2 check + full-repo `20 source files` confirmed clean)*
 - Build check: `Status: Not Applicable` — Python backend uses `uv` package sync with no separate compilation or bundle build step configured in `spec/sdd-profile.md`; package integrity and types are validated by `T5.3` (`mypy src`) and `T4.1` (`pytest`).
 

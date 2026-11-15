@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/1-core-foundation`
 - **Roadmap section**: `spec/roadmap.md` → Phase 1
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 1)
-- **Status**: Implementing
+- **Status**: Validated
 
 ---
 
@@ -209,7 +209,7 @@ Commands match `spec/sdd-profile.md` exactly:
 - [x] **PI.1** — End-to-end offline scenario (`backend/tests/integration/test_phase1_e2e.py`: `SeedCatalogProvider` → `CachedCatalogProvider` using `InMemoryTTLCache` and `fakeredis`-backed `RedisCacheStore` → `rank_top_offers`) across `EG`, `SA`, and `AE` — **Observed (`uv run --no-sync --directory backend pytest tests/integration/test_phase1_e2e.py -v`): `16 passed in 0.94s`**:
   - First query is a cache miss (`cache_hit=False`, `source_mode=CatalogSourceMode.SEED`); repeat normalized query is a cache hit (`cache_hit=True`) returning identical offers without re-invoking the underlying provider.
   - Seed traps (bilingual accessories, `5.0`-star `1`-review trap, unrated offers vs well-reviewed products, and `4x` overpriced scalper outliers) are handled deterministically per `P3` and `P4`, returning Top-3 `RankedOffer` items ordered by descending `value_score`.
-- [x] **PI.2** — Full suite (100% offline deterministic pass): `uv run --directory backend pytest -v` — **Observed (`uv run --no-sync --directory backend pytest -v`): `79 passed in 1.56s`** (16 new Phase 1 E2E tests + 4 cached catalog integration tests + 59 unit tests).
+- [x] **PI.2** — Full suite (100% offline deterministic pass): `uv run --directory backend pytest -v` — **Observed (`uv run --no-sync --directory backend pytest -v`): `80 passed in 1.72s`** (`60` unit tests [`22` `test_config_and_models.py` + `18` `test_ranking.py` + `6` `test_cache_stores.py` + `5` `test_catalog_seed.py` + `9` `test_catalog_serper.py`] + `20` integration tests [`16` `test_phase1_e2e.py` + `4` `test_cached_catalog.py`]; 0 failed, 0 skipped).
 - [x] **PI.3** — Lint / format / type check:
   - `uv run --directory backend ruff check .` — **Observed (`uv run --no-sync --directory backend ruff check .`): `All checks passed!`**
   - `uv run --directory backend ruff format --check .` — **Observed (`uv run --no-sync --directory backend ruff format --check .`): `30 files already formatted`**
@@ -239,3 +239,4 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 | Feature 1.1 | ✅ Implemented (`impl-101`) & verified (`verifier`) | ✅ 22 passed (`pytest`), `ruff check`, `ruff format --check`, `mypy src` clean | `feat(domain): implement Feature 1.1 backend scaffold, config, and domain models` | Preserved `backend/.env.example` & `frontend/.env.example`; updated `.gitignore` Python caches; locked `backend/uv.lock` (`P7`) |
 | Feature 1.2 | ✅ Implemented (`impl-102`) & verified (`verifier`) | ✅ 18 unit tests + 63/63 full suite (`pytest`), `ruff check .`, `ruff format --check .`, `mypy src` clean | `feat(ranking): implement Feature 1.2 deterministic value scoring and trap filters` | Pure domain ranking engine (`rank_top_offers`), bilingual Stage 1/2 guards, Bayesian prior `3.4`, `P_norm=1.0` (`P3`, `P4`, `P7`) |
 | Feature 1.3 | ✅ Implemented (`impl-103`) & verified (`verifier`) | ✅ 23 unit/integration tests + 63/63 full suite (`pytest`), `ruff check .`, `ruff format --check .`, `mypy src` clean | `feat(catalog): implement Feature 1.3 pluggable catalog providers and TTL caching` | Pure `CatalogProvider`/`CacheStore` ports, `InMemoryTTLCache` + `fakeredis`-verified `RedisCacheStore`, `EG`/`SA`/`AE` bilingual seeds, single-call `SerperShoppingProvider` (`P1`, `P2`, `P5`, `P6`, `P7`) |
+| Phase Integration & Review Fixes | ✅ Implemented (`test_phase1_e2e.py` + 4-lens deep review fixes) & verified (`verifier`) | ✅ `80 passed` (`60` unit + `20` integration via `pytest -v`), `ruff check .` clean, `ruff format --check .` (`30 files already formatted`), `mypy src` (`20 source files`), `uv lock --check` clean | `84c4821` (`test(phase-1): add end-to-end phase integration tests and PI evidence`), `da37e4a` (`fix(phase-1): resolve security, architecture, spec-drift, and test review findings`) | Added 16-case Phase 1 E2E suite (`test_phase1_e2e.py`) and resolved all High/Medium and targeted Low findings from 4-lens deep review (#49–#52); deferred 3 non-blocking cache/settings follow-ups to `spec/backlog/2026-11-15-phase1-cache-and-settings-followups.md` |
