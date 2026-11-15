@@ -14,7 +14,10 @@ from commerce_ai.config.settings import redact_url_password
 from commerce_ai.domain.errors import CacheStoreError
 
 _URL_CREDENTIALS_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:/?#\s]*):([^\s/?#]+)@")
-_QUERY_SECRET_RE = re.compile(r"([?&](?:password|pass|token)=)([^&#\s]+)", re.IGNORECASE)
+_QUERY_SECRET_RE = re.compile(
+    r"([?&](?:password|passwd|pwd|pass|token|secret|api[_-]?key)=)([^&#\s]+)",
+    re.IGNORECASE,
+)
 _PASSWORD_KWARG_RE = re.compile(r"(password\s*=\s*['\"]?)([^'\",\s\)]+)(['\"]?)", re.IGNORECASE)
 
 

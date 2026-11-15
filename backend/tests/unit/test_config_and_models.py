@@ -45,6 +45,7 @@ from commerce_ai.domain import (
     TurnStatus,
     TurnTelemetry,
 )
+from commerce_ai.domain.models import _validate_positive_currency_decimal
 from commerce_ai.domain.ports import LLMClient, SessionRepository
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -212,6 +213,7 @@ def test_app_settings_defaults_and_env_loading(
         "SESSION_MAX_TURNS",
         "CORS_ALLOWED_ORIGINS",
         "RATE_LIMIT_RPM",
+        "TRUSTED_PROXY_CIDRS",
     ):
         monkeypatch.delenv(env_var, raising=False)
 
@@ -238,6 +240,8 @@ def test_app_settings_defaults_and_env_loading(
     assert defaults.session_max_turns == 10
     assert defaults.cors_allowed_origins == ["http://localhost:3000"]
     assert defaults.rate_limit_rpm == 60
+    assert defaults.trusted_proxy_cidrs == ["127.0.0.1/32", "::1/128"]
+    assert defaults.safe_summary()["trusted_proxy_cidrs"] == ["127.0.0.1/32", "::1/128"]
 
     env_copy = tmp_path / ".env"
     example_text = (BACKEND_DIR / ".env.example").read_text(encoding="utf-8")
@@ -285,6 +289,14 @@ def test_app_settings_defaults_and_env_loading(
         "http://localhost:3000",
         "https://admin.example.com",
     ]
+
+    monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.168.1.5")
+    csv_proxy_settings = AppSettings(_env_file=None)
+    assert csv_proxy_settings.trusted_proxy_cidrs == ["10.0.0.0/8", "192.168.1.5/32"]
+
+    monkeypatch.setenv("TRUSTED_PROXY_CIDRS", '["172.16.0.0/12", "::1/128"]')
+    json_proxy_settings = AppSettings(_env_file=None)
+    assert json_proxy_settings.trusted_proxy_cidrs == ["172.16.0.0/12", "::1/128"]
 
 
 def test_domain_error_hierarchy() -> None:
@@ -402,6 +414,15 @@ def test_search_intent_normalized_cache_key() -> None:
     ortho_a = SearchIntent(query="مكواة إلى أين آلة ٱختبار مبنى", country=CountryCode.EG)
     ortho_b = SearchIntent(query="مكواه الي اين اله اختبار مبني", country=CountryCode.EG)
     assert ortho_a.catalog_cache_key() == ortho_b.catalog_cache_key()
+
+    digits_ar = SearchIntent(query="أيفون ١٥", country=CountryCode.EG)
+    digits_fa = SearchIntent(query="ايفون ۱۵", country=CountryCode.EG)
+    digits_en = SearchIntent(query="ايفون 15", country=CountryCode.EG)
+    assert digits_ar.catalog_cache_key() == digits_en.catalog_cache_key()
+    assert digits_fa.catalog_cache_key() == digits_en.catalog_cache_key()
+
+    tatweel_ar = SearchIntent(query="سـمـاعـة أنـكـر", country=CountryCode.EG)
+    assert tatweel_ar.catalog_cache_key() == ar_a.catalog_cache_key()
 
     en_a = SearchIntent(
         query=" Anker  Earbuds ",
@@ -732,6 +753,8 @@ def test_app_settings_secret_masking_and_invalid_values(
         AppSettings(_env_file=None, database_url="   ")
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None, llm_primary_model="")
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, trusted_proxy_cidrs=["not-a-valid-cidr"])
 
     bad_port_redacted = redact_url_password("redis://:sec-ret@127.0.0.1:badport/0")
     assert bad_port_redacted is not None
@@ -744,15 +767,25 @@ def test_app_settings_secret_masking_and_invalid_values(
     assert "w%40rd" not in complex_pw_redacted
 
     query_redacted = redact_url_password(
-        "redis://127.0.0.1:6379/0?password=qsecret&pass=psecret&token=tsecret&db=0"
+        "redis://127.0.0.1:6379/0"
+        "?password=qsecret&pass=psecret&token=tsecret"
+        "&passwd=wsecret&pwd=xsecret&secret=ysecret"
+        "&api_key=zsecret&api-key=asecret&db=0"
     )
     assert query_redacted is not None
-    assert "qsecret" not in query_redacted
-    assert "psecret" not in query_redacted
-    assert "tsecret" not in query_redacted
-    assert "password=***" in query_redacted
-    assert "pass=***" in query_redacted
-    assert "token=***" in query_redacted
+    for secret_val in (
+        "qsecret",
+        "psecret",
+        "tsecret",
+        "wsecret",
+        "xsecret",
+        "ysecret",
+        "zsecret",
+        "asecret",
+    ):
+        assert secret_val not in query_redacted
+    for key_name in ("password", "pass", "token", "passwd", "pwd", "secret", "api_key", "api-key"):
+        assert f"{key_name}=***" in query_redacted
     assert "db=0" in query_redacted
 
     bad_port_query_redacted = redact_url_password(
@@ -771,10 +804,14 @@ def test_product_offer_rejects_invalid_price_and_rating() -> None:
         Decimal("0.001"),
         Decimal("NaN"),
         Decimal("Infinity"),
+        Decimal("1e50"),
     ]
     for bad_price in bad_prices:
         with pytest.raises(ValidationError):
             ProductOffer.model_validate(_make_offer_payload(price=bad_price))
+
+    with pytest.raises(OfferValidationError):
+        _validate_positive_currency_decimal(Decimal("1e50"), field_name="price")
 
     for bad_rating in (-0.1, 5.1, float("nan")):
         with pytest.raises(ValidationError):
@@ -969,7 +1006,18 @@ def test_search_intent_validation_edge_cases() -> None:
         with pytest.raises(ValidationError):
             SearchIntent(query=bad_query, country=CountryCode.EG)
 
-    for bad_budget in (Decimal("0"), Decimal("-50"), Decimal("0.001")):
+    max_allowed = SearchIntent(
+        query="AirPods", country=CountryCode.SA, max_budget=Decimal("10000000.00")
+    )
+    assert max_allowed.max_budget == Decimal("10000000.00")
+
+    for bad_budget in (
+        Decimal("0"),
+        Decimal("-50"),
+        Decimal("0.001"),
+        Decimal("10000000.01"),
+        Decimal("1e50"),
+    ):
         with pytest.raises(ValidationError):
             SearchIntent(query="AirPods", country=CountryCode.SA, max_budget=bad_budget)
 

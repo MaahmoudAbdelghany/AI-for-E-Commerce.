@@ -17,6 +17,7 @@ from commerce_ai.adapters.catalog.cached_provider import CachedCatalogProvider
 from commerce_ai.adapters.catalog.seed_provider import SeedCatalogProvider
 from commerce_ai.adapters.llm.fake import FakeLLMClient
 from commerce_ai.adapters.session.sqlalchemy_repo import SQLAlchemySessionRepository
+from commerce_ai.agent.graph import ShoppingAssistantWorkflow
 from commerce_ai.api.schemas import (
     ChatResponse,
     ErrorResponse,
@@ -34,6 +35,7 @@ from commerce_ai.domain.models import (
     SearchIntent,
     TurnAction,
     TurnStatus,
+    TurnTelemetry,
 )
 from commerce_ai.domain.ports import CatalogProvider
 from commerce_ai.main import create_app
@@ -290,7 +292,7 @@ async def test_chat_endpoint_bilingual_multiturn_search_refine_compare(tmp_path:
 
 
 async def test_openapi_schema_contract_for_frontend_codegen(tmp_path: Path) -> None:
-    """T2.4: /openapi.json emits OpenAPI 3.1 contract with versioned paths and DTO schemas."""
+    """T2.4: /openapi.json emits OpenAPI 3.1 contract with methods, errors, and DTO schemas."""
     app = create_app(_make_settings(_sqlite_url(tmp_path / "openapi.db")))
 
     async with httpx.AsyncClient(
@@ -302,13 +304,36 @@ async def test_openapi_schema_contract_for_frontend_codegen(tmp_path: Path) -> N
         schema = res.json()
         assert schema["openapi"].startswith("3.1")
         assert schema["info"]["version"] == "0.1.0"
-        assert {
-            "/api/v1/chat",
-            "/api/v1/search",
-            "/api/v1/markets",
-            "/health",
-        }.issubset(set(schema["paths"]))
-        component_schemas = set(schema["components"]["schemas"])
+
+        paths = schema["paths"]
+        expected_methods = {
+            "/api/v1/chat": {"post"},
+            "/api/v1/search": {"post"},
+            "/api/v1/markets": {"get"},
+            "/health": {"get"},
+        }
+        assert set(expected_methods).issubset(set(paths))
+        for path, methods in expected_methods.items():
+            assert set(paths[path].keys()) == methods
+
+        def _response_schema_ref(path: str, method: str, status: str) -> str | None:
+            resp = paths[path][method]["responses"][status]
+            return resp["content"]["application/json"]["schema"].get("$ref")
+
+        for status in ("422", "429", "500"):
+            assert _response_schema_ref("/api/v1/chat", "post", status) == (
+                "#/components/schemas/ErrorResponse"
+            )
+        for status in ("422", "429", "503", "500"):
+            assert _response_schema_ref("/api/v1/search", "post", status) == (
+                "#/components/schemas/ErrorResponse"
+            )
+        for get_path in ("/api/v1/markets", "/health"):
+            assert _response_schema_ref(get_path, "get", "500") == (
+                "#/components/schemas/ErrorResponse"
+            )
+
+        schemas = schema["components"]["schemas"]
         assert {
             "ChatRequest",
             "ChatResponse",
@@ -317,7 +342,72 @@ async def test_openapi_schema_contract_for_frontend_codegen(tmp_path: Path) -> N
             "MarketsResponse",
             "HealthResponse",
             "ErrorResponse",
-        }.issubset(component_schemas)
+            "CountryCode",
+            "StoreFilter",
+            "TurnAction",
+            "TurnStatus",
+        }.issubset(set(schemas))
+
+        assert {"message", "session_id", "country", "store", "max_budget", "language"}.issubset(
+            set(schemas["ChatRequest"]["properties"])
+        )
+        assert {
+            "session_id",
+            "status",
+            "reply",
+            "action",
+            "top_offers",
+            "telemetry",
+            "request_id",
+        }.issubset(set(schemas["ChatResponse"]["properties"]))
+        assert {
+            "query",
+            "country",
+            "store",
+            "max_budget",
+            "min_rating",
+            "include_accessories",
+            "language",
+        }.issubset(set(schemas["SearchRequest"]["properties"]))
+        assert {
+            "intent",
+            "ranking_result",
+            "source_mode",
+            "cache_hit",
+            "latency_ms",
+            "request_id",
+        }.issubset(set(schemas["SearchResponse"]["properties"]))
+        assert {"markets", "default_country", "default_store", "request_id"}.issubset(
+            set(schemas["MarketsResponse"]["properties"])
+        )
+        assert {
+            "status",
+            "app_env",
+            "catalog_mode",
+            "llm_mode",
+            "cache_backend",
+            "session_backend",
+            "version",
+        }.issubset(set(schemas["HealthResponse"]["properties"]))
+        assert {"error_code", "message", "retriable", "request_id", "details"}.issubset(
+            set(schemas["ErrorResponse"]["properties"])
+        )
+        assert set(schemas["CountryCode"]["enum"]) == {"EG", "SA", "AE"}
+        assert set(schemas["StoreFilter"]["enum"]) == {"noon", "amazon", "both"}
+        assert set(schemas["TurnAction"]["enum"]) == {
+            "search",
+            "compare",
+            "clarify",
+            "off_topic",
+            "refuse",
+        }
+        assert set(schemas["TurnStatus"]["enum"]) == {
+            "ok",
+            "clarify",
+            "off_topic",
+            "refused",
+            "degraded",
+        }
 
 
 async def test_chat_guardrail_refusal_vs_structural_422(tmp_path: Path) -> None:
@@ -373,6 +463,8 @@ async def test_chat_guardrail_refusal_vs_structural_422(tmp_path: Path) -> None:
             for invalid_payload in (
                 {"country": "EG"},
                 {"message": "Anker", "max_budget": -5},
+                {"message": "Anker", "max_budget": "1e50"},
+                {"message": "Anker", "max_budget": "10000000.01"},
                 {"message": "Anker", "unknown": True},
                 {"message": "Anker", "country": "US"},
                 {"message": "Anker", "session_id": "   "},
@@ -435,7 +527,12 @@ async def test_search_endpoint_422_validation_envelopes(tmp_path: Path) -> None:
             {"query": ""},
             {"query": "   "},
             {"query": "a" * 501},
+            {"query": "earbuds\x00"},
+            {"query": "earbuds\u202e"},
+            {"query": "earbuds\U000e0001"},
             {"query": "earbuds", "max_budget": 0},
+            {"query": "earbuds", "max_budget": "1e50"},
+            {"query": "earbuds", "max_budget": "10000000.01"},
             {"query": "earbuds", "min_rating": 5.5},
             {"query": "earbuds", "country": "US"},
             {"query": "earbuds", "extra_field": 1},
@@ -449,12 +546,50 @@ async def test_search_endpoint_422_validation_envelopes(tmp_path: Path) -> None:
 
 
 async def test_http_rate_limiting_429_and_exemptions(tmp_path: Path) -> None:
-    """T3.4: HTTP 429 rate limiting, isolated client buckets, spoof safety, and exemptions."""
+    """T3.4: HTTP 429 rate limiting, trusted-proxy X-Forwarded-For safety, and exemptions."""
+    # 1. Untrusted peer cannot bypass rate limit by rotating X-Forwarded-For.
+    untrusted_app = create_app(
+        _make_settings(
+            _sqlite_url(tmp_path / "ratelimit_untrusted.db"),
+            rate_limit_rpm=2,
+            cors_allowed_origins=["http://localhost:3000"],
+        )
+    )
+    async with (
+        untrusted_app.router.lifespan_context(untrusted_app),
+        httpx.AsyncClient(
+            transport=ASGITransport(app=untrusted_app, client=("198.51.100.99", 1234)),
+            base_url="http://test",
+        ) as untrusted_client,
+    ):
+        assert (
+            await untrusted_client.post(
+                "/api/v1/search",
+                json={"query": "Anker"},
+                headers={"X-Forwarded-For": "203.0.113.1"},
+            )
+        ).status_code == 200
+        assert (
+            await untrusted_client.post(
+                "/api/v1/search",
+                json={"query": "Anker"},
+                headers={"X-Forwarded-For": "203.0.113.2"},
+            )
+        ).status_code == 200
+        blocked_untrusted = await untrusted_client.post(
+            "/api/v1/search",
+            json={"query": "Anker"},
+            headers={"X-Forwarded-For": "203.0.113.3"},
+        )
+        assert blocked_untrusted.status_code == 429
+
+    # 2. Trusted proxy walks X-Forwarded-For right-to-left and falls back safely.
     app = create_app(
         _make_settings(
             _sqlite_url(tmp_path / "ratelimit.db"),
             rate_limit_rpm=2,
             cors_allowed_origins=["http://localhost:3000"],
+            trusted_proxy_cidrs=["198.51.100.20/32", "10.0.0.0/8"],
         )
     )
 
@@ -465,12 +600,19 @@ async def test_http_rate_limiting_429_and_exemptions(tmp_path: Path) -> None:
             base_url="http://test",
         ) as client,
     ):
-        client_a = {"X-Forwarded-For": "203.0.113.10", "Origin": "http://localhost:3000"}
+        client_a = {
+            "X-Forwarded-For": "192.0.2.50, 203.0.113.10, 10.0.0.5",
+            "Origin": "http://localhost:3000",
+        }
         assert (
             await client.post("/api/v1/search", json={"query": "Anker"}, headers=client_a)
         ).status_code == 200
         assert (
-            await client.post("/api/v1/chat", json={"message": "Anker"}, headers=client_a)
+            await client.post(
+                "/api/v1/chat",
+                json={"message": "Anker"},
+                headers={"X-Forwarded-For": "192.0.2.99, 203.0.113.10"},
+            )
         ).status_code == 200
 
         limited = await client.post("/api/v1/search", json={"query": "Anker"}, headers=client_a)
@@ -482,14 +624,14 @@ async def test_http_rate_limiting_429_and_exemptions(tmp_path: Path) -> None:
         assert err.retriable is True
         assert err.request_id == limited.headers["X-Request-ID"]
 
-        # Distinct valid X-Forwarded-For IP has its own isolated bucket.
+        # Distinct valid rightmost untrusted X-Forwarded-For IP has its own isolated bucket.
         client_b = {"X-Forwarded-For": "203.0.113.11"}
         assert (
             await client.post("/api/v1/search", json={"query": "Anker"}, headers=client_b)
         ).status_code == 200
 
-        # Malformed X-Forwarded-For falls back safely to client host bucket (2 reqs then 429).
-        spoofed_1 = {"X-Forwarded-For": "not-an-ip, 203.0.113.99"}
+        # Malformed rightmost X-Forwarded-For falls back to peer host bucket (2 reqs then 429).
+        spoofed_1 = {"X-Forwarded-For": "203.0.113.99, not-an-ip"}
         spoofed_2 = {"X-Forwarded-For": "another;bad-ip"}
         assert (
             await client.post("/api/v1/search", json={"query": "Anker"}, headers=spoofed_1)
@@ -633,3 +775,36 @@ async def test_lifespan_db_fallback_and_500_error_masking(
         assert injected_repo.initialized is True
     assert injected_repo.closed is False
     assert injected_llm.closed is False
+
+    # Verify create_app(..., workflow=...) injection is preserved across lifespan.
+    from commerce_ai.domain.models import ChatTurnResult
+
+    class _CustomWorkflow(ShoppingAssistantWorkflow):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run_turn(self, **_kwargs: Any) -> ChatTurnResult:
+            self.calls += 1
+            return ChatTurnResult(
+                session_id="custom-wf-sess",
+                status=TurnStatus.OK,
+                reply="injected workflow reply",
+                action=TurnAction.CLARIFY,
+                telemetry=TurnTelemetry(),
+            )
+
+    custom_wf = _CustomWorkflow()
+    wf_app = create_app(
+        _make_settings("sqlite+aiosqlite:///:memory:"),
+        workflow=custom_wf,
+    )
+    async with (
+        wf_app.router.lifespan_context(wf_app),
+        httpx.AsyncClient(transport=ASGITransport(app=wf_app), base_url="http://test") as client,
+    ):
+        wf_res = await client.post("/api/v1/chat", json={"message": "hello"})
+        assert wf_res.status_code == 200
+        wf_body = ChatResponse.model_validate(wf_res.json())
+        assert wf_body.session_id == "custom-wf-sess"
+        assert wf_body.reply == "injected workflow reply"
+        assert custom_wf.calls == 1

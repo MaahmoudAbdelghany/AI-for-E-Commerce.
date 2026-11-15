@@ -1,5 +1,6 @@
 """Typed runtime configuration loaded safely via pydantic-settings."""
 
+import ipaddress
 import json
 import re
 from collections.abc import Iterator
@@ -13,7 +14,37 @@ from commerce_ai.config.scoring import ScoringConfig
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#")
 _FALLBACK_URL_SECRET_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:/?#\s]*):([^\s/?#]+)@")
-_QUERY_SECRET_RE = re.compile(r"([?&](?:password|pass|token)=)([^&#\s]+)", re.IGNORECASE)
+_QUERY_SECRET_RE = re.compile(
+    r"([?&](?:password|passwd|pwd|pass|token|secret|api[_-]?key)=)([^&#\s]+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_string_list_setting(value: Any, *, field_name: str) -> Any:
+    """Parse comma-separated strings, JSON arrays, or sequences while stripping '#' comments."""
+    if isinstance(value, str):
+        cleaned = _strip_inline_comment(value)
+        if not cleaned:
+            return []
+        if cleaned.startswith("["):
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{field_name} must be valid JSON or CSV") from exc
+            if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+                raise ValueError(f"{field_name} JSON must be a list of strings")
+            return [item.strip() for item in parsed if item.strip()]
+        return [part.strip() for part in cleaned.split(",") if part.strip()]
+    if isinstance(value, (list, tuple)):
+        items: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError(f"{field_name} items must be strings")
+            cleaned_item = _strip_inline_comment(item)
+            if cleaned_item:
+                items.append(cleaned_item)
+        return items
+    return value
 
 
 def _mask_query_secrets(text: str) -> str:
@@ -101,6 +132,9 @@ class AppSettings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
     rate_limit_rpm: int = Field(default=60, ge=0)
+    trusted_proxy_cidrs: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["127.0.0.1/32", "::1/128"]
+    )
 
     @field_validator(
         "serper_api_key",
@@ -139,31 +173,22 @@ class AppSettings(BaseSettings):
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _clean_cors_allowed_origins(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            cleaned = _strip_inline_comment(value)
-            if not cleaned:
-                return []
-            if cleaned.startswith("["):
-                try:
-                    parsed = json.loads(cleaned)
-                except json.JSONDecodeError as exc:
-                    raise ValueError("cors_allowed_origins must be valid JSON or CSV") from exc
-                if not isinstance(parsed, list) or not all(
-                    isinstance(item, str) for item in parsed
-                ):
-                    raise ValueError("cors_allowed_origins JSON must be a list of strings")
-                return [item.strip() for item in parsed if item.strip()]
-            return [part.strip() for part in cleaned.split(",") if part.strip()]
-        if isinstance(value, (list, tuple)):
-            origins: list[str] = []
-            for item in value:
-                if not isinstance(item, str):
-                    raise ValueError("cors_allowed_origins items must be strings")
-                cleaned_item = _strip_inline_comment(item)
-                if cleaned_item:
-                    origins.append(cleaned_item)
-            return origins
-        return value
+        return _parse_string_list_setting(value, field_name="cors_allowed_origins")
+
+    @field_validator("trusted_proxy_cidrs", mode="before")
+    @classmethod
+    def _clean_trusted_proxy_cidrs(cls, value: Any) -> Any:
+        parsed = _parse_string_list_setting(value, field_name="trusted_proxy_cidrs")
+        if not isinstance(parsed, list):
+            return parsed
+        validated: list[str] = []
+        for entry in parsed:
+            try:
+                network = ipaddress.ip_network(entry, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"Invalid CIDR in trusted_proxy_cidrs: {entry!r}") from exc
+            validated.append(str(network))
+        return validated
 
     @field_validator(
         "app_env",
@@ -221,5 +246,6 @@ class AppSettings(BaseSettings):
             "session_max_turns": self.session_max_turns,
             "cors_allowed_origins": list(self.cors_allowed_origins),
             "rate_limit_rpm": self.rate_limit_rpm,
+            "trusted_proxy_cidrs": list(self.trusted_proxy_cidrs),
             "scoring": self.scoring.model_dump(),
         }

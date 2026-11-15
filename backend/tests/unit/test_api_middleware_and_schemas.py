@@ -111,7 +111,10 @@ def _build_middleware_probe_app(
         raise CatalogProviderError(
             provider="serper",
             retriable=True,
-            reason="upstream timeout https://google.serper.dev/shopping?token=secret123",
+            reason=(
+                "upstream timeout https://google.serper.dev/shopping?token=secret123 "
+                "Bearer bearersecret999"
+            ),
         )
 
     @app.get("/err/offer")
@@ -132,7 +135,10 @@ def _build_middleware_probe_app(
 
     @app.get("/err/boom")
     async def _err_boom() -> dict[str, str]:
-        raise RuntimeError("postgresql://user:supersecret@db/app")
+        raise RuntimeError(
+            "postgresql://user:supersecret@db/app Bearer boomtoken888\n"
+            'Traceback (most recent call last):\n  File "app.py", line 1, in <module>'
+        )
 
     return app
 
@@ -319,6 +325,7 @@ async def test_sliding_window_rate_limiter_and_exemptions() -> None:
     assert (await limiter.check("10.0.0.3"))[0] is True
     assert (await limiter.check("10.0.0.1"))[0] is True  # evicted oldest client bucket
 
+    # Untrusted peer (or no trusted proxies) ignores X-Forwarded-For completely.
     assert (
         extract_client_ip(
             {
@@ -326,14 +333,92 @@ async def test_sliding_window_rate_limiter_and_exemptions() -> None:
                 "client": ("127.0.0.1", 1),
             }
         )
+        == "127.0.0.1"
+    )
+    assert (
+        extract_client_ip(
+            {
+                "headers": [(b"x-forwarded-for", b"198.51.100.99")],
+                "client": ("198.51.100.5", 1),
+            },
+            trusted_proxies=("127.0.0.1/32",),
+        )
+        == "198.51.100.5"
+    )
+    # Trusted proxy walks right-to-left and picks the rightmost untrusted hop.
+    assert (
+        extract_client_ip(
+            {
+                "headers": [(b"x-forwarded-for", b"1.1.1.1, 203.0.113.9, 10.0.0.2")],
+                "client": ("127.0.0.1", 1),
+            },
+            trusted_proxies=("127.0.0.1/32", "10.0.0.0/8"),
+        )
         == "203.0.113.9"
     )
     assert (
         extract_client_ip(
-            {"headers": [(b"x-forwarded-for", b"spoofed;evil")], "client": ("127.0.0.1", 1)}
+            {"headers": [(b"x-forwarded-for", b"spoofed;evil")], "client": ("127.0.0.1", 1)},
+            trusted_proxies=("127.0.0.1/32",),
         )
         == "127.0.0.1"
     )
+    assert (
+        extract_client_ip(
+            {"headers": [(b"x-forwarded-for", b"10.0.0.2")], "client": ("127.0.0.1", 1)},
+            trusted_proxies=("127.0.0.1/32", "10.0.0.0/8"),
+        )
+        == "127.0.0.1"
+    )
+
+    # Integration through middleware: untrusted peer rotating XFF cannot evade rate limit.
+    spoof_app = _build_middleware_probe_app(
+        _make_settings(rate_limit_rpm=2, trusted_proxy_cidrs=["127.0.0.1/32"]),
+        clock=clock,
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=spoof_app, client=("198.51.100.42", 4321)),
+        base_url="http://test",
+    ) as client:
+        assert (
+            await client.post("/api/v1/search", headers={"X-Forwarded-For": "1.2.3.4"})
+        ).status_code == 200
+        assert (
+            await client.post("/api/v1/search", headers={"X-Forwarded-For": "5.6.7.8"})
+        ).status_code == 200
+        spoof_blocked = await client.post(
+            "/api/v1/search",
+            headers={"X-Forwarded-For": "9.10.11.12"},
+        )
+        assert spoof_blocked.status_code == 429
+
+    # Trusted proxy separates distinct real client IPs from rightmost untrusted hop.
+    proxy_app = _build_middleware_probe_app(
+        _make_settings(rate_limit_rpm=1, trusted_proxy_cidrs=["127.0.0.1/32", "10.0.0.0/8"]),
+        clock=clock,
+    )
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=proxy_app, client=("127.0.0.1", 4321)),
+        base_url="http://test",
+    ) as client:
+        assert (
+            await client.post(
+                "/api/v1/search",
+                headers={"X-Forwarded-For": "203.0.113.10, 10.0.0.5"},
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                "/api/v1/search",
+                headers={"X-Forwarded-For": "203.0.113.11, 10.0.0.5"},
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                "/api/v1/search",
+                headers={"X-Forwarded-For": "203.0.113.10, 10.0.0.5"},
+            )
+        ).status_code == 429
 
 
 async def test_error_handlers_emit_sanitized_error_response(
@@ -364,6 +449,15 @@ async def test_error_handlers_emit_sanitized_error_response(
         assert val_err.request_id == val_res.headers["X-Request-ID"] == "req-err-01"
         assert val_res.headers["access-control-allow-origin"] == "http://localhost:3000"
         assert val_err.details is not None and len(val_err.details) >= 1
+        assert all("input" not in detail for detail in val_err.details)
+
+        bad_input_res = await client.post(
+            "/validate",
+            json={"query": "earbuds", "max_budget": "secret_user_input_12345"},
+            headers=headers,
+        )
+        assert bad_input_res.status_code == 422
+        assert "secret_user_input_12345" not in bad_input_res.text
 
         bad_json_res = await client.post(
             "/validate",
@@ -382,6 +476,8 @@ async def test_error_handlers_emit_sanitized_error_response(
         assert cat_err.retriable is True
         assert cat_err.request_id == cat_res.headers["X-Request-ID"]
         assert "secret123" not in cat_res.text
+        assert "bearersecret999" not in cat_res.text
+        assert "Bearer ***" in cat_err.message
 
         offer_res = await client.get("/err/offer", headers=headers)
         assert offer_res.status_code == 422
@@ -411,10 +507,14 @@ async def test_error_handlers_emit_sanitized_error_response(
         assert boom_err.request_id == boom_res.headers["X-Request-ID"] == "req-err-01"
         assert boom_res.headers["access-control-allow-origin"] == "http://localhost:3000"
         assert "supersecret" not in boom_res.text
+        assert "boomtoken888" not in boom_res.text
         assert "postgresql://" not in boom_res.text
         assert "Traceback" not in boom_res.text
+        assert 'File "app.py"' not in boom_res.text
 
     assert "supersecret" not in caplog.text
+    assert "boomtoken888" not in caplog.text
+    assert "Traceback (most recent call last):" not in caplog.text
 
 
 async def test_health_response_has_zero_secrets_and_degraded_flag() -> None:
@@ -481,30 +581,44 @@ def test_api_schema_validation_boundaries() -> None:
     assert raw_long.session_id == "sess-123"
     assert raw_long.country == CountryCode.EG
 
+    assert ChatRequest(message="hi", max_budget=Decimal("10000000.00")).max_budget == Decimal(
+        "10000000.00"
+    )
     for bad_chat in (
         {"message": "hi", "extra": 1},
         {"message": "hi", "country": "US"},
         {"message": "hi", "max_budget": 0},
         {"message": "hi", "max_budget": -5},
+        {"message": "hi", "max_budget": "10000000.01"},
+        {"message": "hi", "max_budget": "1e50"},
         {"message": "hi", "language": "fr"},
         {"message": "hi", "session_id": ""},
         {"message": "hi", "session_id": "   "},
         {"message": "hi", "session_id": "a" * 129},
         {"message": "hi", "session_id": "bad\nid"},
+        {"message": "hi", "session_id": "bad\u202eid"},
+        {"message": "hi", "session_id": "bad\U000e0069id"},
     ):
         with pytest.raises(ValidationError):
             ChatRequest.model_validate(bad_chat)
 
     # SearchRequest strictly validates query, bounds, and extra fields.
     valid_search = SearchRequest(
-        query="  Anker earbuds  ", min_rating=4.5, max_budget=Decimal("500")
+        query="  Anker earbuds  ", min_rating=4.5, max_budget=Decimal("10000000.00")
     )
     assert valid_search.query == "Anker earbuds"
     for bad_search in (
         {"query": ""},
         {"query": "   "},
         {"query": "a" * 501},
+        {"query": "earbuds\x00"},
+        {"query": "earbuds\x1b[31m"},
+        {"query": "earbuds\u202efake"},
+        {"query": "earbuds\u2066hidden"},
+        {"query": "earbuds\U000e0069tag"},
         {"query": "earbuds", "max_budget": 0},
+        {"query": "earbuds", "max_budget": "10000000.01"},
+        {"query": "earbuds", "max_budget": "1e50"},
         {"query": "earbuds", "min_rating": -0.1},
         {"query": "earbuds", "min_rating": 5.1},
         {"query": "earbuds", "country": "US"},

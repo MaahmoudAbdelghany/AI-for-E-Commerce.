@@ -972,3 +972,29 @@ async def test_explain_mode_llm_respects_two_call_ceiling() -> None:
     assert res_cached.telemetry.llm_calls == 2
     assert res_cached.telemetry.used_template_summary is False
     assert llm_cached.call_count == 2
+
+
+async def test_explain_mode_auto_skips_call2_when_call1_failed() -> None:
+    """P4/P7: explain_mode='auto' skips Call #2 when Call #1 hit llm_provider_error:*."""
+    llm = FakeLLMClient(
+        responses=[
+            LLMProviderError(provider="gemini", retriable=True, reason="503 outage"),
+            "Should never be consumed by Call #2",
+        ]
+    )
+    workflow = graph_module.ShoppingAssistantWorkflow(
+        settings=_make_settings(explain_mode="auto"),
+        catalog_provider=_SpyCatalogProvider(cache_hit=False),
+        session_repository=InMemorySessionStore(),
+        llm_client=llm,
+    )
+    res = await workflow.run_turn(
+        message="Anker earbuds in Egypt under 2000 EGP",
+        session_id="s-outage-auto",
+    )
+    assert res.telemetry.llm_calls == 1
+    assert llm.call_count == 1
+    assert res.telemetry.used_rule_intent_fallback is True
+    assert res.telemetry.used_template_summary is True
+    assert res.telemetry.degraded_reason == "llm_provider_error:gemini"
+    assert len(res.top_offers) >= 1

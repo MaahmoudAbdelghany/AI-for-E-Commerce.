@@ -438,6 +438,10 @@ class ShoppingAssistantWorkflow:
             return False
         if explain_mode == "llm":
             return True
+        if any(
+            reason.startswith("llm_provider_error:") for reason in state.get("degraded_reasons", [])
+        ):
+            return False
         # "auto": Call #2 only on uncached searches or saved-offer comparisons.
         return state["action"] == TurnAction.COMPARE or not state.get("catalog_cache_hit", False)
 

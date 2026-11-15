@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 
 from commerce_ai.adapters.cache.factory import create_cache_store
@@ -77,9 +78,16 @@ async def _safe_close_resource(resource: object | None, *, settings: AppSettings
 async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Upgrade async cache, initialize session storage with fallback, and close owned adapters."""
     settings: AppSettings = application.state.settings
+    shared_http_client: httpx.AsyncClient | None = (
+        httpx.AsyncClient()
+        if (application.state._owns_catalog_provider or application.state._owns_llm_client)
+        else None
+    )
 
     try:
         if application.state._owns_cache_store and application.state._owns_catalog_provider:
+            previous_catalog = application.state.catalog_provider
+            previous_cache = application.state.cache_store
             upgraded_cache = await create_cache_store(settings)
             application.state.cache_store = upgraded_cache
             if isinstance(upgraded_cache, RedisCacheStore):
@@ -91,7 +99,18 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
             application.state.catalog_provider = create_catalog_provider(
                 settings,
                 cache=upgraded_cache,
+                http_client=shared_http_client,
             )
+            await _safe_close_resource(previous_catalog, settings=settings)
+            await _safe_close_resource(previous_cache, settings=settings)
+
+        if application.state._owns_llm_client:
+            previous_llm = application.state.llm_client
+            application.state.llm_client = create_llm_client(
+                settings,
+                http_client=shared_http_client,
+            )
+            await _safe_close_resource(previous_llm, settings=settings)
 
         repo: SessionRepository = application.state.session_repository
         init_fn = getattr(repo, "initialize", None)
@@ -136,6 +155,8 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
             await _safe_close_resource(application.state.cache_store, settings=settings)
         if application.state._owns_llm_client:
             await _safe_close_resource(application.state.llm_client, settings=settings)
+        if shared_http_client is not None:
+            await _safe_close_resource(shared_http_client, settings=settings)
         if application.state._owns_session_repository:
             await _safe_close_resource(application.state.session_repository, settings=settings)
 

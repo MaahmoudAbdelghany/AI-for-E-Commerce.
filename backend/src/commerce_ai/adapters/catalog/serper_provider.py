@@ -178,6 +178,7 @@ class SerperShoppingProvider:
         *,
         timeout_seconds: float = 2.0,
         client: httpx.AsyncClient | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key.get_secret_value().strip():
             raise CatalogProviderError(
@@ -187,7 +188,7 @@ class SerperShoppingProvider:
             )
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
-        self._client = client
+        self._client = http_client if http_client is not None else client
 
     def _redact_reason(self, message: str) -> str:
         secret = self._api_key.get_secret_value()

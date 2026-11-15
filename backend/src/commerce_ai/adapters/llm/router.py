@@ -57,5 +57,7 @@ class ModelRouterLLMClient:
 
     async def aclose(self) -> None:
         """Close underlying primary and fallback clients if they expose aclose()."""
-        await _maybe_aclose(self._primary)
-        await _maybe_aclose(self._fallback)
+        try:
+            await _maybe_aclose(self._primary)
+        finally:
+            await _maybe_aclose(self._fallback)

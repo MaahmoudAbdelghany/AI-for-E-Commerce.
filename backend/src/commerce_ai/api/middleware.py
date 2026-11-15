@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,25 +22,73 @@ from commerce_ai.config.settings import AppSettings
 VALID_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$", re.ASCII)
 DEFAULT_RATE_LIMITED_PATHS: frozenset[str] = frozenset({"/api/v1/chat", "/api/v1/search"})
 
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-def extract_client_ip(scope: Scope) -> str:
-    """Extract first valid IP from X-Forwarded-For or fall back safely to client host."""
+
+def parse_trusted_proxy_networks(cidrs: Sequence[str]) -> tuple[IPNetwork, ...]:
+    """Parse CIDR strings into immutable IPv4/IPv6 network objects."""
+    return tuple(ipaddress.ip_network(cidr, strict=False) for cidr in cidrs)
+
+
+def _parse_ip(raw: str) -> IPAddress | None:
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    try:
+        return ipaddress.ip_address(cleaned)
+    except ValueError:
+        return None
+
+
+def _is_trusted_ip(addr: IPAddress, trusted_networks: tuple[IPNetwork, ...]) -> bool:
+    return any(addr in net for net in trusted_networks)
+
+
+def extract_client_ip(
+    scope: Scope,
+    *,
+    trusted_proxies: Sequence[IPNetwork] | Sequence[str] = (),
+) -> str:
+    """Extract client IP, trusting X-Forwarded-For right-to-left only from trusted proxies."""
+    client = scope.get("client")
+    peer_host: str | None = None
+    if isinstance(client, (tuple, list)) and client:
+        raw_host = client[0]
+        if isinstance(raw_host, str) and raw_host.strip():
+            peer_host = raw_host.strip()
+
+    if peer_host is None:
+        return "unknown"
+
+    peer_ip = _parse_ip(peer_host)
+    if peer_ip is None:
+        return peer_host
+
+    if not trusted_proxies:
+        return str(peer_ip)
+
+    trusted_networks = tuple(
+        net
+        if isinstance(net, (ipaddress.IPv4Network, ipaddress.IPv6Network))
+        else ipaddress.ip_network(net, strict=False)
+        for net in trusted_proxies
+    )
+    if not _is_trusted_ip(peer_ip, trusted_networks):
+        return str(peer_ip)
+
     headers = Headers(scope=scope)
     forwarded_for = headers.get("x-forwarded-for")
     if forwarded_for:
-        first_hop = forwarded_for.split(",", 1)[0].strip()
-        if first_hop:
-            try:
-                return str(ipaddress.ip_address(first_hop))
-            except ValueError:
-                pass
+        hops = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        for hop in reversed(hops):
+            hop_ip = _parse_ip(hop)
+            if hop_ip is None:
+                break
+            if not _is_trusted_ip(hop_ip, trusted_networks):
+                return str(hop_ip)
 
-    client = scope.get("client")
-    if isinstance(client, (tuple, list)) and client:
-        host = client[0]
-        if isinstance(host, str) and host.strip():
-            return host.strip()
-    return "unknown"
+    return str(peer_ip)
 
 
 class RequestIDMiddleware:
@@ -164,9 +212,11 @@ class SlidingWindowRateLimitMiddleware:
         max_clients: int = 10_000,
         clock: Callable[[], float] | None = None,
         protected_paths: frozenset[str] = DEFAULT_RATE_LIMITED_PATHS,
+        trusted_proxy_cidrs: Sequence[str] = ("127.0.0.1/32", "::1/128"),
     ) -> None:
         self.app = app
         self._protected_paths = protected_paths
+        self._trusted_proxies = parse_trusted_proxy_networks(trusted_proxy_cidrs)
         self._limiter = SlidingWindowRateLimiter(
             limit_rpm=rate_limit_rpm,
             window_seconds=window_seconds,
@@ -190,7 +240,7 @@ class SlidingWindowRateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        client_key = extract_client_ip(scope)
+        client_key = extract_client_ip(scope, trusted_proxies=self._trusted_proxies)
         allowed, retry_after = await self._limiter.check(client_key)
         if allowed:
             await self.app(scope, receive, send)
@@ -226,6 +276,7 @@ def configure_middleware(
         SlidingWindowRateLimitMiddleware,
         rate_limit_rpm=settings.rate_limit_rpm,
         clock=clock,
+        trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
     )
     app.add_middleware(
         CORSMiddleware,

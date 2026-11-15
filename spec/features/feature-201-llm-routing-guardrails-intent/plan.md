@@ -134,10 +134,11 @@ flowchart LR
      - `session_max_turns: int = Field(default=10, ge=2, le=50)`
      - `cors_allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])` (`Annotated[list[str], NoDecode]` or custom before-validator parsing comma-separated strings, JSON arrays, or `list[str]` while stripping inline `#` comments)
      - `rate_limit_rpm: int = Field(default=60, ge=0)`
+     - `trusted_proxy_cidrs: list[str] = Field(default_factory=lambda: ["127.0.0.1/32", "::1/128"])` (`Annotated[list[str], NoDecode]` parsing CSV/JSON/`list[str]` while stripping inline `#` comments and validating every entry via `ipaddress.ip_network(..., strict=False)`)
    - Validators & Redaction:
      - Clean inline `#` comments and outer whitespace across scalar/secret/URL/list env inputs; normalize blank `gemini_api_key`, `groq_api_key`, `openai_api_key`, `llm_fallback_model` to `None`; reject blank `database_url` or `llm_primary_model`.
-     - `@field_serializer("redis_url", "database_url", when_used="always")` calls `redact_url_password(...)` so `model_dump()` and `model_dump_json()` mask passwords consistently with `repr()`, `str()`, and `safe_summary()`, while keeping raw `settings.redis_url` (`str | None`) and `settings.database_url` (`str`) attributes intact for internal factories.
-     - `__repr_args__()` redacts `database_url` alongside `redis_url`; `safe_summary()` reports `"***"` for set secrets (`gemini_api_key`, `groq_api_key`, `openai_api_key`, `serper_api_key`), redacted `redis_url`/`database_url`, and all Phase 2 settings.
+     - `@field_serializer("redis_url", "database_url", when_used="always")` calls `redact_url_password(...)` (masking userinfo passwords and `password|passwd|pwd|pass|token|secret|api[_-]?key` query params consistently with `api/errors.py`) so `model_dump()` and `model_dump_json()` mask credentials consistently with `repr()`, `str()`, and `safe_summary()`, while keeping raw `settings.redis_url` (`str | None`) and `settings.database_url` (`str`) attributes intact for internal factories.
+     - `__repr_args__()` redacts `database_url` alongside `redis_url`; `safe_summary()` reports `"***"` for set secrets (`gemini_api_key`, `groq_api_key`, `openai_api_key`, `serper_api_key`), redacted `redis_url`/`database_url`, and all Phase 2 settings (including `trusted_proxy_cidrs`).
 
 2. **`commerce_ai.domain.errors` (`errors.py`)**:
    - `LLMProviderError(DomainError)`: `def __init__(self, provider: str, retriable: bool, reason: str) -> None` storing `self.provider`, `self.retriable`, `self.reason` and formatting `super().__init__(f"[{provider}] (retriable={retriable}): {reason}")`.
@@ -145,7 +146,8 @@ flowchart LR
 
 3. **`commerce_ai.domain.models` (`models.py`)**:
    - `SearchIntent`:
-     - Slugification applies `NFKC`, `.lower()`, Arabic diacritics/tatweel removal, and Arabic orthographic folding (`أ/إ/آ/ٱ -> ا`, `ة -> ه`, `ى -> ي`) prior to non-alnum-Arabic hyphenation.
+     - Enforces `max_budget <= Decimal("10000000.00")` (`MAX_BUDGET_DECIMAL`), and `_validate_positive_currency_decimal` catches `(InvalidOperation, ValueError, TypeError)` raising `OfferValidationError`.
+     - Slugification applies `NFKC`, `.lower()`, Arabic diacritics/tatweel removal, Arabic-Indic/Eastern Arabic digit folding (`٠-٩`/`۰-۹ -> 0-9`), and Arabic orthographic folding (`أ/إ/آ/ٱ -> ا`, `ة -> ه`, `ى -> ي`) prior to non-alnum-Arabic hyphenation.
      - `catalog_cache_key(self) -> str`: `"{country}:{store}:{language}:{slug}"` (lowercase).
      - `normalized_cache_key(self) -> str`: `"{country}:{store}:{language}:{slug}:{budget}:{min_rating}"` (lowercase).
    - Enums (`StrEnum`):
@@ -167,21 +169,20 @@ flowchart LR
 5. **`commerce_ai.adapters.catalog.cached_provider` (`cached_provider.py`)**:
    - `CachedCatalogProvider.search_offers(intent)`:
      - Computes `cache_key = intent.catalog_cache_key()`.
-     - Reads cache first (degrading cleanly on `CacheStoreError` / corrupt JSON).
-     - On cache miss, acquires `self._lock` (`asyncio.Lock`) to look up or create an `asyncio.Task` inside `self._in_flight[cache_key]` running the upstream `self._provider.search_offers(intent)` + non-error `self._cache.set(...)`.
-     - Concurrent callers await `asyncio.shield(task)` so individual caller cancellation does not abort the shared fetch; `finally` removes `cache_key` from `self._in_flight` under `self._lock` only if it matches the active task.
+     - Coordinates per-key `asyncio.Lock` over `self._cache.get(cache_key)` + `_in_flight[cache_key]` lookup/insertion and cache write + `_in_flight` removal (while leaving upstream `self._provider.search_offers(intent)` unlocked for cross-key concurrency), closing any post-`cache.get()` TOCTOU window (`CacheStoreError` / corrupt JSON still degrade cleanly to miss).
+     - Concurrent callers await `asyncio.shield(task)` so individual caller cancellation does not abort the shared fetch; `finally` removes `cache_key` from `self._in_flight` under the per-key lock only if it matches the active task.
      - `CatalogProviderError` is never written to `self._cache` and propagates to awaiting callers.
 
 6. **`commerce_ai.adapters.llm` (`gemini.py`, `openai_compat.py`, `router.py`, `fake.py`, `factory.py`)**:
    - `GeminiLLMClient`: `POST {base_url}/models/{model_id}:generateContent` (`https://generativelanguage.googleapis.com/v1beta`), `x-goog-api-key` header (never query param), `systemInstruction` + `contents`, `generationConfig` (`maxOutputTokens`, `temperature`, `responseMimeType="application/json"` when `json_mode=True`), `llm_timeout_seconds`, secret-redacted `LLMProviderError`, optional `aclose()`.
    - `OpenAICompatibleLLMClient`: `POST {base_url}/chat/completions` (`groq` -> `https://api.groq.com/openai/v1`, `openai` -> `https://api.openai.com/v1`, configurable `base_url`), `Authorization: Bearer ...`, `response_format={"type": "json_object"}` when `json_mode=True`, `max_tokens`, `temperature`, `llm_timeout_seconds`, secret-redacted `LLMProviderError`, optional `aclose()`.
-   - `ModelRouterLLMClient`: calls `primary.complete(request)`; on `LLMProviderError`, calls `fallback.complete(request)` at most once and sets `used_fallback_model=True`; counts as 1 logical LLM step (`INV-04`); delegates `aclose()`.
+   - `ModelRouterLLMClient`: calls `primary.complete(request)`; on `LLMProviderError`, calls `fallback.complete(request)` at most once and sets `used_fallback_model=True`; counts as 1 logical LLM step (`INV-04`); delegates `aclose()` inside `try ... finally` so `_fallback` always closes even if `_primary.aclose()` raises.
    - `FakeLLMClient`: deterministic 100% offline `LLMClient` supporting scripted response/exception queues or callable handler, tracking `requests` and `call_count`, plus no-op `aclose()`.
    - `create_llm_client(settings: AppSettings, *, http_client: httpx.AsyncClient | None = None) -> LLMClient | None`: handles `"fake"`, `"auto"`, and `"live"` modes across `"gemini/..."`, `"groq/..."`, and `"openai/..."` specs; raises `LLMProviderError(provider="llm", retriable=False, reason=...)` in `"live"` mode when no valid key/provider is configured.
 
 7. **`commerce_ai.agent` (`guardrails.py`, `intent.py`)**:
-   - `GuardrailResult(allowed: bool, sanitized_message: str = "", reason_code: str | None = None, language: Literal["ar", "en"] = "ar")` and `check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailResult`.
-   - `IntentExtractionResult(action: TurnAction, intent: SearchIntent | None = None, language: Literal["ar", "en"] = "ar", clarification_question: str | None = None, used_rule_fallback: bool = False, llm_calls_used: int = 0, degraded_reason: str | None = None)` and `async def extract_turn_intent(message: str, *, default_country: CountryCode, store_override: StoreFilter | None = None, max_budget_override: Decimal | None = None, language_hint: Literal["ar", "en"] | None = None, prior_intent: SearchIntent | None = None, recent_turns: Sequence[SessionTurn] = (), has_saved_offers: bool = False, llm_client: LLMClient | None = None) -> IntentExtractionResult`.
+   - `GuardrailResult(allowed: bool, sanitized_message: str = "", reason_code: str | None = None, language: Literal["ar", "en"] = "ar")` and `check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailResult`: checks `len(message) > max_chars` before full-string scanning (`detect_message_language(message[:max_chars])`), rejects Unicode Tag characters (`U+E0000..U+E007F`) in `_has_disallowed_control_chars()`, strips Unicode `Cf`/`Mn` and Arabic tatweel (`\u0640`) during normalization, supports dot-separated Luhn card candidates, and strips Unicode `Cf` characters from `sanitized_message` on `allowed=True`.
+   - `IntentExtractionResult(...)` and `async def extract_turn_intent(...)`: validates overrides in `_apply_overrides()` via `SearchIntent.model_validate(...)` and catches `(ValidationError, InvalidOperation, ValueError)` around LLM `SearchIntent` parsing.
 
 ---
 
@@ -195,7 +196,8 @@ flowchart LR
 | `backend/src/commerce_ai/adapters/llm/__init__.py` | Create | Package scaffold & exports for LLM adapters (`P7`) |
 | `backend/src/commerce_ai/adapters/session/__init__.py` | Create | Package scaffold for Phase 2 session adapters (`P7`) |
 | `backend/src/commerce_ai/api/__init__.py` | Create | Package scaffold for Phase 2 FastAPI layer (`P7`) |
-| `backend/src/commerce_ai/config/settings.py` | Modify | Add Phase 2 settings, CORS parsing, `@field_serializer` URL redaction (`P1`), and updated `safe_summary()` |
+| `backend/src/commerce_ai/config/settings.py` | Modify | Add Phase 2 settings (including `trusted_proxy_cidrs`), CORS/CIDR parsing, `@field_serializer` URL redaction (`P1`), aligned query-secret scrubbing, and updated `safe_summary()` |
+| `backend/src/commerce_ai/domain/__init__.py` | Modify | Export Phase 2 domain models, enums, and errors (`TurnAction`, `TurnStatus`, `LLM*`, `Session*`, `ChatTurnResult`, `LLMProviderError`, `SessionStoreError`) |
 | `backend/src/commerce_ai/domain/errors.py` | Modify | Add `LLMProviderError` and `SessionStoreError` |
 | `backend/src/commerce_ai/domain/models.py` | Modify | Add Arabic orthographic folding, `catalog_cache_key()`, updated `normalized_cache_key()`, and Phase 2 enums/models |
 | `backend/src/commerce_ai/domain/ports.py` | Modify | Add `@runtime_checkable` `LLMClient` and `SessionRepository` protocols |

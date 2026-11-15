@@ -96,7 +96,7 @@ Feature 2.1 is complete when `backend/pyproject.toml` and `backend/uv.lock` decl
 ```text
 uv sync --directory backend --all-extras --dev
 uv lock --directory backend --check
-uv run --directory backend pytest tests/unit/test_config_and_models.py tests/unit/test_llm_clients.py tests/unit/test_guardrails_and_intent.py tests/integration/test_cached_catalog.py -v
+uv run --directory backend pytest tests/unit/test_config_and_models.py tests/unit/test_llm_clients.py tests/unit/test_guardrails_and_intent.py tests/integration/test_cached_catalog.py tests/integration/test_phase1_e2e.py -v
 uv run --directory backend pytest -v
 uv run --directory backend ruff check .
 uv run --directory backend ruff format --check .
@@ -111,12 +111,12 @@ uv run --directory backend mypy src
 |:---|:---|:---|
 | Dependency sync (`uv sync --directory backend --all-extras --dev`) | ✅ | Synced `backend/.venv` with Phase 2 dependencies in `backend/pyproject.toml` and updated `backend/uv.lock` (exit code `0`) |
 | Lockfile consistency (`uv lock --directory backend --check`) | ✅ | `Resolved 70 packages in 2ms` (exit code `0`) |
-| Feature 2.1 + Folded Phase 1 suites (`uv run --no-sync --directory backend pytest tests/unit/test_config_and_models.py tests/unit/test_llm_clients.py tests/unit/test_guardrails_and_intent.py tests/integration/test_cached_catalog.py tests/integration/test_phase1_e2e.py -v`) | ✅ | `64 passed in 1.29s` (`0` failed, `0` skipped; covers `T1.1`–`T1.15`, `T2.1`–`T2.2`, `T3.1`–`T3.11`) |
-| Full offline backend suite (`uv run --no-sync --directory backend pytest -v`) | ✅ | `collected 103 items / 1 deselected / 102 selected`; `102 passed, 1 deselected in 1.83s` (`0` failed, `0` skipped; `@pytest.mark.live` deselected by default `addopts = ["-m", "not live"]`) (`T4.1`, `INV-07`) |
+| Feature 2.1 + Folded Phase 1 suites (`uv run --no-sync --directory backend pytest tests/unit/test_config_and_models.py tests/unit/test_llm_clients.py tests/unit/test_guardrails_and_intent.py tests/integration/test_cached_catalog.py tests/integration/test_phase1_e2e.py -v`) | ✅ | `65 passed in 1.10s` (`0` failed, `0` skipped; covers `T1.1`–`T1.15`, `T2.1`–`T2.2`, `T3.1`–`T3.11`) |
+| Full offline backend suite (`uv run --no-sync --directory backend pytest -v`) | ✅ | `collected 164 items / 1 deselected / 163 selected`; `163 passed, 1 deselected, 1 warning in 18.37s` (`0` failed, `0` skipped; `@pytest.mark.live` deselected by default `addopts = ["-m", "not live"]`) (`T4.1`, `INV-07`) |
 | Live opt-in smoke collection/guard (`uv run --no-sync --directory backend pytest tests/integration/test_live_llm_smoke.py -m live -v`) | ✅ | `1 skipped in 0.24s` (explicitly opt-in via `-m live`; skips cleanly when no live provider API keys are configured) |
 | Ruff lint (`uv run --no-sync --directory backend ruff check .`) | ✅ | `All checks passed!` (exit code `0`, `T5.2`) |
-| Ruff format (`uv run --no-sync --directory backend ruff format --check .`) | ✅ | `44 files already formatted` (exit code `0`, `T5.3`) |
-| Strict type check (`uv run --no-sync --directory backend mypy src`) | ✅ | `Success: no issues found in 31 source files` (exit code `0`, `T5.4`) |
+| Ruff format (`uv run --no-sync --directory backend ruff format --check .`) | ✅ | `62 files already formatted` (exit code `0`, `T5.3`) |
+| Strict type check (`uv run --no-sync --directory backend mypy src`) | ✅ | `Success: no issues found in 43 source files` (exit code `0`, `T5.4`) |
 | Tier 6 — Manual / Visual UI | ⏭ N/A | Backend-only feature; no UI or browser rendering until Phase 3 (`Feature 3.1`) |
 | Tier 7 — API / CLI / Application | ⏭ N/A | Internal Python adapters/agent modules only; FastAPI routes and startup checks land in `Feature 2.3` |
 | Extra Gates — Eval suite (`tests/evals`) | ⏭ N/A | Eval dataset and full LangGraph workflow checks begin in Phase 4 (`Feature 4.1`) |

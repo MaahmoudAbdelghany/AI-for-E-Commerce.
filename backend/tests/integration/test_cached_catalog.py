@@ -343,3 +343,76 @@ async def test_cached_catalog_single_flight_error_cleanup() -> None:
     assert flaky.calls == 2
     assert recovered.cache_hit is False
     assert len(recovered.offers) >= 6
+
+
+async def test_cached_catalog_all_waiter_cancellation_and_distinct_key_concurrency() -> None:
+    """T2.2/T3.4 — Cancelling all error waiters clears _in_flight; distinct keys run together."""
+    seed = SeedCatalogProvider()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BarrierFailProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            self.calls += 1
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+                raise CatalogProviderError(provider="serper", retriable=True, reason="timeout")
+            return await seed.search_offers(intent)
+
+    flaky = _BarrierFailProvider()
+    cache = InMemoryTTLCache()
+    cached = CachedCatalogProvider(provider=flaky, cache=cache, ttl_seconds=1800)
+    intent_cancel = SearchIntent(query="Anker earbuds", country=CountryCode.EG, language="en")
+
+    waiters = [asyncio.create_task(cached.search_offers(intent_cancel)) for _ in range(3)]
+    await started.wait()
+    for waiter in waiters:
+        waiter.cancel()
+    cancelled_results = await asyncio.gather(*waiters, return_exceptions=True)
+    assert all(isinstance(item, asyncio.CancelledError) for item in cancelled_results)
+
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert flaky.calls == 1
+    assert cached._in_flight == {}
+    assert await cache.get(intent_cancel.catalog_cache_key()) is None
+
+    recovered = await cached.search_offers(intent_cancel)
+    assert flaky.calls == 2
+    assert recovered.cache_hit is False
+
+    # Distinct catalog_cache_key() cold misses execute concurrently without blocking each other.
+    key_a_started = asyncio.Event()
+    key_a_release = asyncio.Event()
+
+    class _DistinctKeyProvider:
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            if intent.country == CountryCode.SA:
+                key_a_started.set()
+                await key_a_release.wait()
+            return await seed.search_offers(intent)
+
+    concurrent_cached = CachedCatalogProvider(
+        provider=_DistinctKeyProvider(),
+        cache=InMemoryTTLCache(),
+        ttl_seconds=600,
+    )
+    task_sa = asyncio.create_task(
+        concurrent_cached.search_offers(
+            SearchIntent(query="Anker earbuds", country=CountryCode.SA, language="en")
+        )
+    )
+    await key_a_started.wait()
+    res_ae = await concurrent_cached.search_offers(
+        SearchIntent(query="Anker earbuds", country=CountryCode.AE, language="en")
+    )
+    assert len(res_ae.offers) >= 1
+    assert not task_sa.done()
+    key_a_release.set()
+    res_sa = await task_sa
+    assert len(res_sa.offers) >= 1

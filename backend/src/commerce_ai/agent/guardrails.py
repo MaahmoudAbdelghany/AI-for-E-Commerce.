@@ -35,7 +35,7 @@ _DISALLOWED_BIDI_CODEPOINTS = frozenset(
     }
 )
 
-_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\s-]?){11,18}\d(?!\d)")
+_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\s.-]?){11,18}\d(?!\d)")
 _CARD_KEYWORD_RE = re.compile(
     r"\b(?:credit\s*card|debit\s*card|card\s*number|visa|mastercard|amex)\b"
     r"|(?:بطاقه\s*ائتمان|رقم\s*(?:البطاقه|الكارت)|فيزا|ماستركارد)",
@@ -141,7 +141,13 @@ def _has_disallowed_control_chars(text: str) -> bool:
             return True
         if code in _DISALLOWED_BIDI_CODEPOINTS:
             return True
+        if 0xE0000 <= code <= 0xE007F:
+            return True
     return False
+
+
+def _strip_cf_chars(text: str) -> str:
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
 
 
 def _passes_luhn(digits: str) -> bool:
@@ -161,8 +167,14 @@ def _passes_luhn(digits: str) -> bool:
 
 
 def _normalize_for_inspection(text: str) -> str:
-    nfkc = unicodedata.normalize("NFKC", text).translate(_DIGIT_TRANS).lower()
-    without_diacritics = _ARABIC_DIACRITICS_RE.sub("", nfkc)
+    # Decompose with NFKD before stripping Mn marks so both precomposed accents (e.g. 'ị')
+    # and base+combining spoofs (e.g. 'i\\u0323') collapse to plain ASCII/Arabic letters.
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(
+        ch for ch in decomposed if ch != "\u0640" and unicodedata.category(ch) not in ("Cf", "Mn")
+    )
+    normalized = unicodedata.normalize("NFKC", stripped).translate(_DIGIT_TRANS).lower()
+    without_diacritics = _ARABIC_DIACRITICS_RE.sub("", normalized)
     folded = without_diacritics.translate(_ARABIC_ORTHOGRAPHY_TRANS)
     return " ".join(folded.split())
 
@@ -170,7 +182,7 @@ def _normalize_for_inspection(text: str) -> str:
 def _contains_sensitive_pii_or_payment(normalized_text: str) -> bool:
     has_card_kw = _CARD_KEYWORD_RE.search(normalized_text) is not None
     for match in _CARD_CANDIDATE_RE.finditer(normalized_text):
-        digits = re.sub(r"[\s-]", "", match.group(0))
+        digits = re.sub(r"[\s.-]", "", match.group(0))
         if 13 <= len(digits) <= 19 and _passes_luhn(digits):
             return True
         if has_card_kw and 12 <= len(digits) <= 19:
@@ -187,14 +199,12 @@ def _contains_prompt_injection(normalized_text: str) -> bool:
 
 def check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailResult:
     """Validate raw shopper text at 0 LLM tokens before DB access or workflow calls."""
-    language = detect_message_language(message)
-
-    if not message or not message.strip():
+    if not message:
         return GuardrailResult(
             allowed=False,
             sanitized_message="",
             reason_code="empty_message",
-            language=language,
+            language="ar",
         )
 
     if len(message) > max_chars:
@@ -202,6 +212,16 @@ def check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailR
             allowed=False,
             sanitized_message="",
             reason_code="max_length_exceeded",
+            language=detect_message_language(message[:max_chars]),
+        )
+
+    language = detect_message_language(message)
+
+    if not message.strip():
+        return GuardrailResult(
+            allowed=False,
+            sanitized_message="",
+            reason_code="empty_message",
             language=language,
         )
 
@@ -213,8 +233,14 @@ def check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailR
             language=language,
         )
 
-    normalized = _normalize_for_inspection(message)
-    if _contains_sensitive_pii_or_payment(normalized):
+    candidates = [_normalize_for_inspection(message)]
+    if any(unicodedata.category(ch) == "Cf" for ch in message):
+        cf_spaced = "".join(" " if unicodedata.category(ch) == "Cf" else ch for ch in message)
+        spaced_norm = _normalize_for_inspection(cf_spaced)
+        if spaced_norm != candidates[0]:
+            candidates.append(spaced_norm)
+
+    if any(_contains_sensitive_pii_or_payment(candidate) for candidate in candidates):
         return GuardrailResult(
             allowed=False,
             sanitized_message="",
@@ -222,7 +248,7 @@ def check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailR
             language=language,
         )
 
-    if _contains_prompt_injection(normalized):
+    if any(_contains_prompt_injection(candidate) for candidate in candidates):
         return GuardrailResult(
             allowed=False,
             sanitized_message="",
@@ -230,7 +256,15 @@ def check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailR
             language=language,
         )
 
-    sanitized = " ".join(message.split())
+    sanitized = " ".join(_strip_cf_chars(message).split())
+    if not sanitized:
+        return GuardrailResult(
+            allowed=False,
+            sanitized_message="",
+            reason_code="empty_message",
+            language=language,
+        )
+
     return GuardrailResult(
         allowed=True,
         sanitized_message=sanitized,

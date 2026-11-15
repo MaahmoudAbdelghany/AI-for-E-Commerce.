@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from commerce_ai.agent.guardrails import detect_message_language
 from commerce_ai.domain.errors import LLMProviderError
 from commerce_ai.domain.models import (
+    MAX_BUDGET_DECIMAL,
     CountryCode,
     LLMMessage,
     LLMRequest,
@@ -304,7 +305,7 @@ def _extract_budget(folded_text: str) -> tuple[Decimal | None, bool, str]:
                 value = Decimal(raw_num).quantize(_CENTS, rounding=ROUND_HALF_UP)
             except InvalidOperation:
                 continue
-            if value > Decimal("0.00"):
+            if Decimal("0.00") < value <= MAX_BUDGET_DECIMAL:
                 cleaned = f"{folded_text[: match.start()]} {folded_text[match.end() :]}"
                 return value, False, cleaned
     return None, False, folded_text
@@ -369,7 +370,9 @@ def _apply_overrides(
         updates["max_budget"] = max_budget_override
     if not updates:
         return intent
-    return intent.model_copy(update=updates)
+    merged_payload = intent.model_dump(mode="python")
+    merged_payload.update(updates)
+    return SearchIntent.model_validate(merged_payload)
 
 
 def _parse_with_rules(
@@ -691,7 +694,7 @@ async def extract_turn_intent(
         if not isinstance(raw_obj, dict):
             raise ValueError("LLM intent payload must be a JSON object")
         payload = _LLMIntentPayload.model_validate(raw_obj)
-    except (ValueError, ValidationError):
+    except (ValueError, ValidationError, InvalidOperation):
         return _parse_with_rules(
             message,
             default_country=default_country,
@@ -715,7 +718,7 @@ async def extract_turn_intent(
                 prior_intent=prior_intent,
                 language=final_language,
             )
-        except ValidationError:
+        except (ValidationError, InvalidOperation, ValueError):
             return _parse_with_rules(
                 message,
                 default_country=default_country,

@@ -4,7 +4,7 @@ import hashlib
 import re
 import unicodedata
 from collections.abc import Mapping
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Literal, Self
 from urllib.parse import urlsplit
@@ -25,6 +25,7 @@ from pydantic import ValidationError as PydanticValidationError
 from commerce_ai.domain.errors import OfferValidationError
 
 _CENTS = Decimal("0.01")
+MAX_BUDGET_DECIMAL = Decimal("10000000.00")
 _HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
 
 
@@ -63,6 +64,7 @@ _ARABIC_ORTHOGRAPHY_TRANS = str.maketrans(
         "\u0671": "\u0627",  # ٱ -> ا
         "\u0629": "\u0647",  # ة -> ه
         "\u0649": "\u064a",  # ى -> ي
+        **dict(zip("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789", strict=True)),
     }
 )
 _NON_ALNUM_ARABIC_RE = re.compile(r"[^a-z0-9\u0621-\u064A\u0660-\u0669\u06F0-\u06F9]+")
@@ -126,15 +128,30 @@ class TurnStatus(StrEnum):
     DEGRADED = "degraded"
 
 
-def _validate_positive_currency_decimal(value: Decimal, *, field_name: str) -> Decimal:
-    """Validate finiteness, positive sign, and 2-decimal currency quantization."""
-    if not value.is_finite():
-        raise OfferValidationError(f"{field_name} must be a finite Decimal")
-    if value <= Decimal("0"):
-        raise OfferValidationError(f"{field_name} must be greater than 0")
-    quantized = value.quantize(_CENTS, rounding=ROUND_HALF_UP)
+def _validate_positive_currency_decimal(
+    value: Decimal,
+    *,
+    field_name: str,
+    max_value: Decimal | None = None,
+) -> Decimal:
+    """Validate finiteness, positive sign, optional upper bound, and 2-decimal quantization."""
+    try:
+        if not value.is_finite():
+            raise OfferValidationError(f"{field_name} must be a finite Decimal")
+        if value <= Decimal("0"):
+            raise OfferValidationError(f"{field_name} must be greater than 0")
+        if max_value is not None and value > max_value:
+            raise OfferValidationError(f"{field_name} must be <= {max_value}")
+        quantized = value.quantize(_CENTS, rounding=ROUND_HALF_UP)
+    except OfferValidationError:
+        raise
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise OfferValidationError(f"{field_name} must be a valid currency amount") from exc
+
     if quantized <= Decimal("0.00"):
         raise OfferValidationError(f"{field_name} must remain greater than 0.00 after quantization")
+    if max_value is not None and quantized > max_value:
+        raise OfferValidationError(f"{field_name} must be <= {max_value}")
     return quantized
 
 
@@ -250,7 +267,11 @@ class SearchIntent(BaseModel):
     query: str
     country: CountryCode
     store: StoreFilter = StoreFilter.BOTH
-    max_budget: Decimal | None = None
+    max_budget: Decimal | None = Field(
+        default=None,
+        le=MAX_BUDGET_DECIMAL,
+        allow_inf_nan=False,
+    )
     min_rating: float | None = Field(default=None, ge=0.0, le=5.0, allow_inf_nan=False)
     exclude_keywords: tuple[str, ...] = ()
     include_accessories: bool = False
@@ -266,7 +287,11 @@ class SearchIntent(BaseModel):
     def _validate_max_budget(cls, value: Decimal | None) -> Decimal | None:
         if value is None:
             return None
-        return _validate_positive_currency_decimal(value, field_name="max_budget")
+        return _validate_positive_currency_decimal(
+            value,
+            field_name="max_budget",
+            max_value=MAX_BUDGET_DECIMAL,
+        )
 
     def _query_slug(self) -> str:
         normalized = unicodedata.normalize("NFKC", self.query).lower()

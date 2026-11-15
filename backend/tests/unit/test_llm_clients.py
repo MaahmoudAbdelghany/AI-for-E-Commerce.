@@ -37,7 +37,7 @@ def _sample_request(*, json_mode: bool = True) -> LLMRequest:
     )
 
 
-async def test_gemini_client_request_and_response() -> None:
+async def test_gemini_client_request_and_response(monkeypatch: pytest.MonkeyPatch) -> None:
     """T1.6 — GeminiLLMClient uses header-only auth, maps payload, and parses LLMResponse."""
     captured: list[httpx.Request] = []
     secret = "gem-secret-xyz-123"
@@ -70,8 +70,9 @@ async def test_gemini_client_request_and_response() -> None:
         )
         assert isinstance(client, LLMClient)
         response = await client.complete(_sample_request(json_mode=True))
+        response_text_mode = await client.complete(_sample_request(json_mode=False))
 
-    assert len(captured) == 1
+    assert len(captured) == 2
     req = captured[0]
     assert req.method == "POST"
     assert str(req.url) == (
@@ -88,12 +89,71 @@ async def test_gemini_client_request_and_response() -> None:
     assert body["generationConfig"]["temperature"] == 0.0
     assert body["generationConfig"]["responseMimeType"] == "application/json"
 
+    body_text = json.loads(captured[1].content.decode("utf-8"))
+    assert "responseMimeType" not in body_text["generationConfig"]
+    assert response_text_mode.content == '{"action":"search","query":"Anker earbuds"}'
+
     assert response.provider == "gemini"
     assert response.model == "gemini-2.5-flash"
     assert response.content == '{"action":"search","query":"Anker earbuds"}'
     assert response.input_tokens == 42
     assert response.output_tokens == 15
     assert response.used_fallback_model is False
+
+    # Owned AsyncClient lifecycle when http_client=None closes cleanly on aclose(),
+    # while externally injected http_client stays open.
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as shared_http:
+        borrowed = GeminiLLMClient(
+            api_key=SecretStr(secret),
+            model="gemini/gemini-2.5-flash",
+            http_client=shared_http,
+        )
+        await borrowed.aclose()
+        assert shared_http.is_closed is False
+
+    real_async_client = httpx.AsyncClient
+    created_clients: list[httpx.AsyncClient] = []
+
+    def _mock_async_client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        # Handle both Gemini and OpenAI-compatible payloads cleanly without network access.
+        def _dispatch(req: httpx.Request) -> httpx.Response:
+            if "chat/completions" in str(req.url):
+                return httpx.Response(
+                    200,
+                    json={
+                        "model": "llama-3.3-70b-versatile",
+                        "choices": [{"message": {"content": '{"action":"search","query":"ok"}'}}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                    },
+                )
+            return handler(req)
+
+        instance = real_async_client(transport=httpx.MockTransport(_dispatch))
+        created_clients.append(instance)
+        return instance
+
+    monkeypatch.setattr(httpx, "AsyncClient", _mock_async_client)
+
+    owned_gemini = GeminiLLMClient(
+        api_key=SecretStr(secret),
+        model="gemini/gemini-2.5-flash",
+        http_client=None,
+    )
+    owned_openai = OpenAICompatibleLLMClient(
+        api_key=SecretStr("groq-secret-owned"),
+        model="groq/llama-3.3-70b-versatile",
+        http_client=None,
+    )
+    await owned_gemini.complete(_sample_request(json_mode=True))
+    await owned_openai.complete(_sample_request(json_mode=True))
+    assert len(created_clients) == 2
+    assert all(client.is_closed is False for client in created_clients)
+
+    await owned_gemini.aclose()
+    await owned_openai.aclose()
+    assert all(client.is_closed is True for client in created_clients)
+    assert owned_gemini._client is None
+    assert owned_openai._client is None
 
 
 async def test_openai_compatible_client_request_and_response() -> None:
@@ -190,6 +250,28 @@ async def test_model_router_primary_and_single_failover() -> None:
     assert primary_err.call_count == 1
     assert fallback_used.call_count == 1
     await router_failover.aclose()
+
+    # ModelRouterLLMClient.aclose() closes fallback even if primary.aclose() raises.
+    fallback_close_calls = 0
+
+    class _ClosableFake(FakeLLMClient):
+        def __init__(self, *, fail_close: bool) -> None:
+            super().__init__(responses=['{"action":"clarify"}'], provider="p", model="m")
+            self.fail_close = fail_close
+
+        async def aclose(self) -> None:
+            nonlocal fallback_close_calls
+            if self.fail_close:
+                raise RuntimeError("primary close failure")
+            fallback_close_calls += 1
+
+    resilient_router = ModelRouterLLMClient(
+        primary=_ClosableFake(fail_close=True),
+        fallback=_ClosableFake(fail_close=False),
+    )
+    with pytest.raises(RuntimeError, match="primary close failure"):
+        await resilient_router.aclose()
+    assert fallback_close_calls == 1
 
 
 async def test_fake_llm_client_records_requests() -> None:

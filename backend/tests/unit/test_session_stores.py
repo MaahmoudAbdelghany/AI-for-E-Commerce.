@@ -1,5 +1,6 @@
 """Offline unit and error-handling tests for async session persistence and fallback."""
 
+import asyncio
 import logging
 from decimal import Decimal
 from pathlib import Path
@@ -15,7 +16,10 @@ from commerce_ai.adapters.session.factory import (
     create_session_repository,
 )
 from commerce_ai.adapters.session.memory import InMemorySessionStore
-from commerce_ai.adapters.session.sqlalchemy_repo import SQLAlchemySessionRepository
+from commerce_ai.adapters.session.sqlalchemy_repo import (
+    SessionDataError,
+    SQLAlchemySessionRepository,
+)
 from commerce_ai.config.settings import AppSettings
 from commerce_ai.domain.errors import SessionStoreError
 from commerce_ai.domain.models import (
@@ -388,3 +392,166 @@ async def test_session_factory_fallback_on_init_and_runtime_errors(
     await runtime_repo.delete_session("rt-1")
     assert await runtime_repo.get_session("rt-1") is None
     await runtime_repo.close()
+
+
+async def test_concurrent_same_session_upserts_and_ttl_cleanup(tmp_path: Path) -> None:
+    """T4.2 — Dialect-native upsert handles concurrent writes, ttl<=0 delete, and 60s pruning."""
+    clock = _FakeClock(initial=5000.0)
+    db_urls = [
+        f"sqlite+aiosqlite:///{(tmp_path / 'concurrent.db').as_posix()}",
+        "sqlite+aiosqlite:///:memory:",
+    ]
+    for db_url in db_urls:
+        repo = SQLAlchemySessionRepository(
+            database_url=db_url,
+            max_turns=10,
+            wall_clock=clock,
+            cleanup_interval_seconds=60.0,
+        )
+        await repo.initialize()
+
+        # Concurrent first-turn writes on the same session_id succeed without UNIQUE conflicts.
+        first_states = [_make_session_state("shared-s1", num_turns=1) for _ in range(8)]
+        await asyncio.gather(*(repo.save_session(st, ttl_seconds=120) for st in first_states))
+        loaded_first = await repo.get_session("shared-s1")
+        assert loaded_first is not None
+        assert loaded_first.session_id == "shared-s1"
+
+        # Concurrent multi-turn updates overwrite cleanly.
+        multi_states = [_make_session_state("shared-s1", num_turns=idx) for idx in range(2, 7)]
+        await asyncio.gather(*(repo.save_session(st, ttl_seconds=120) for st in multi_states))
+        assert await repo.get_session("shared-s1") is not None
+
+        # ttl_seconds <= 0 deletes row instead of storing expired data.
+        await repo.save_session(_make_session_state("shared-s1"), ttl_seconds=0)
+        assert await repo.get_session("shared-s1") is None
+
+        # Throttled expired-row cleanup prunes at most once per cleanup_interval_seconds.
+        await repo.save_session(_make_session_state("exp-1"), ttl_seconds=10)
+        await repo.save_session(_make_session_state("exp-2"), ttl_seconds=10)
+        clock.advance(20.0)  # both expired, still < 60s since last cleanup
+        await repo.save_session(_make_session_state("live-1"), ttl_seconds=300)
+        async with repo._session_factory() as db_sess:
+            mid_count = (
+                await db_sess.execute(text("SELECT COUNT(*) FROM commerce_sessions"))
+            ).scalar_one()
+        assert mid_count == 3
+
+        clock.advance(45.0)  # >= 60s elapsed -> next save triggers DELETE cleanup
+        await repo.save_session(_make_session_state("live-2"), ttl_seconds=300)
+        async with repo._session_factory() as db_sess:
+            after_count = (
+                await db_sess.execute(text("SELECT COUNT(*) FROM commerce_sessions"))
+            ).scalar_one()
+        assert after_count == 2
+        await repo.close()
+
+    # InMemorySessionStore handles concurrent same-session upserts cleanly too.
+    mem_store = InMemorySessionStore(clock=clock, max_turns=10)
+    await asyncio.gather(
+        *(mem_store.save_session(_make_session_state("mem-same", num_turns=i)) for i in range(1, 6))
+    )
+    mem_loaded = await mem_store.get_session("mem-same")
+    assert mem_loaded is not None and mem_loaded.session_id == "mem-same"
+
+
+async def test_resilient_session_cooldown_recovery_and_data_error_isolation(
+    tmp_path: Path,
+) -> None:
+    """T4.3 — Startup close, 30s cooldown recovery probe, and SessionDataError non-degradation."""
+    # 1. Startup initialize() failure calls primary.close() and nulls _primary.
+    close_calls = 0
+    broken_primary = SQLAlchemySessionRepository(
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'startup_close.db').as_posix()}",
+    )
+
+    async def _fail_init() -> None:
+        raise SessionStoreError("startup connection failed")
+
+    orig_close = broken_primary.close
+
+    async def _counting_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        await orig_close()
+
+    broken_primary.initialize = _fail_init  # type: ignore[method-assign]
+    broken_primary.close = _counting_close  # type: ignore[method-assign]
+    startup_repo = ResilientSessionRepository(
+        primary=broken_primary,
+        fallback=InMemorySessionStore(),
+        primary_backend="sqlite",
+    )
+    await startup_repo.initialize()
+    assert close_calls == 1
+    assert startup_repo._primary is None
+    assert startup_repo.is_degraded is True
+    await startup_repo.close()
+
+    # 2. Runtime degradation stays in memory during 30s cooldown, then recovers automatically.
+    clock = _FakeClock(initial=2000.0)
+    primary = SQLAlchemySessionRepository(
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'cooldown.db').as_posix()}",
+    )
+    fallback = InMemorySessionStore()
+    repo = ResilientSessionRepository(
+        primary=primary,
+        fallback=fallback,
+        primary_backend="sqlite",
+        recovery_cooldown_seconds=30.0,
+        clock=clock,
+    )
+    await repo.initialize()
+
+    orig_get = primary.get_session
+    orig_save = primary.save_session
+    fail_mode = True
+    primary_attempts = 0
+
+    async def _flaky_save(state: SessionState, ttl_seconds: int = 86400) -> None:
+        nonlocal primary_attempts
+        primary_attempts += 1
+        if fail_mode:
+            raise SessionStoreError("transient lock")
+        await orig_save(state, ttl_seconds=ttl_seconds)
+
+    async def _flaky_get(session_id: str) -> SessionState | None:
+        nonlocal primary_attempts
+        primary_attempts += 1
+        if fail_mode:
+            raise SessionStoreError("transient lock")
+        return await orig_get(session_id)
+
+    primary.save_session = _flaky_save  # type: ignore[method-assign]
+    primary.get_session = _flaky_get  # type: ignore[method-assign]
+
+    await repo.save_session(_make_session_state("rec-1"))
+    assert repo.is_degraded is True
+    assert repo.backend_name == "memory"
+    assert primary_attempts == 1
+
+    # Within cooldown (< 30s), primary is NOT called at all.
+    clock.advance(10.0)
+    assert await repo.get_session("rec-1") is not None
+    assert primary_attempts == 1
+
+    # After cooldown (>= 30s) and primary recovery, probe clears degradation.
+    fail_mode = False
+    clock.advance(25.0)
+    recovered_state = await repo.get_session("rec-1")
+    assert recovered_state is not None
+    assert primary_attempts == 2
+    assert repo.is_degraded is False
+    assert repo.backend_name == "sqlite"
+
+    # 3. Per-row SessionDataError does NOT mark backend degraded.
+    async def _corrupt_get(session_id: str) -> SessionState | None:
+        raise SessionDataError("corrupt single row payload")
+
+    primary.get_session = _corrupt_get  # type: ignore[method-assign]
+    corrupt_fallback = await repo.get_session("rec-1")
+    assert corrupt_fallback is not None
+    assert repo.is_degraded is False
+    assert repo.backend_name == "sqlite"
+
+    await repo.close()

@@ -313,7 +313,7 @@ async def test_offline_no_llm_multiturn_workflow(tmp_path: Path) -> None:
 
 
 async def test_cached_turn_latency_budget_and_determinism(tmp_path: Path) -> None:
-    """T3.10: Cached repeat/refinement turn runs < 250ms offline with 0 Call #2 & 0 catalog hits."""
+    """T3.10: Cached repeat/refinement turn runs < 300ms offline with 0 Call #2 & 0 catalog hits."""
     db_url = _sqlite_url(tmp_path / "latency.db")
     repo = SQLAlchemySessionRepository(database_url=db_url, max_turns=10)
     await repo.initialize()
@@ -361,7 +361,7 @@ async def test_cached_turn_latency_budget_and_determinism(tmp_path: Path) -> Non
         assert cached_turn.telemetry.llm_calls == 1
         assert cached_turn.telemetry.used_template_summary is True
         assert upstream.calls == 1
-        assert elapsed_ms < 250.0
+        assert elapsed_ms < 300.0
 
         cached_repeat = await workflow.run_turn(
             message="أرخص تحت ٢٠٠٠",

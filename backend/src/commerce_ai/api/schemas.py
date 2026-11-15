@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from commerce_ai.domain.models import (
+    MAX_BUDGET_DECIMAL,
     CatalogSourceMode,
     CountryCode,
     CurrencyCode,
@@ -20,9 +21,15 @@ from commerce_ai.domain.models import (
 )
 
 
-def _has_control_chars(value: str) -> bool:
-    """Return True if value contains ASCII or C1 control characters."""
-    return any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value)
+def _has_control_or_bidi_chars(value: str) -> bool:
+    """Return True if value contains ASCII/C1 control, bidi-override/isolate, or Tag chars."""
+    for ch in value:
+        code = ord(ch)
+        if code < 0x20 or 0x7F <= code <= 0x9F:
+            return True
+        if 0x202A <= code <= 0x202E or 0x2066 <= code <= 0x2069 or 0xE0000 <= code <= 0xE007F:
+            return True
+    return False
 
 
 class ChatRequest(BaseModel):
@@ -35,7 +42,12 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, min_length=1, max_length=128)
     country: CountryCode = CountryCode.EG
     store: StoreFilter | None = None
-    max_budget: Decimal | None = Field(default=None, gt=Decimal("0"), allow_inf_nan=False)
+    max_budget: Decimal | None = Field(
+        default=None,
+        gt=Decimal("0"),
+        le=MAX_BUDGET_DECIMAL,
+        allow_inf_nan=False,
+    )
     language: Literal["ar", "en"] | None = None
 
     @field_validator("session_id")
@@ -43,8 +55,8 @@ class ChatRequest(BaseModel):
     def _validate_session_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if _has_control_chars(value):
-            raise ValueError("session_id must not contain control characters")
+        if _has_control_or_bidi_chars(value):
+            raise ValueError("session_id must not contain control or bidi characters")
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("session_id must not be blank")
@@ -75,7 +87,12 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     country: CountryCode = CountryCode.EG
     store: StoreFilter = StoreFilter.BOTH
-    max_budget: Decimal | None = Field(default=None, gt=Decimal("0"), allow_inf_nan=False)
+    max_budget: Decimal | None = Field(
+        default=None,
+        gt=Decimal("0"),
+        le=MAX_BUDGET_DECIMAL,
+        allow_inf_nan=False,
+    )
     min_rating: float | None = Field(default=None, ge=0.0, le=5.0, allow_inf_nan=False)
     include_accessories: bool = False
     language: Literal["ar", "en"] = "ar"
@@ -83,6 +100,8 @@ class SearchRequest(BaseModel):
     @field_validator("query")
     @classmethod
     def _validate_query(cls, value: str) -> str:
+        if _has_control_or_bidi_chars(value):
+            raise ValueError("query must not contain control or bidi characters")
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("query must not be blank")
