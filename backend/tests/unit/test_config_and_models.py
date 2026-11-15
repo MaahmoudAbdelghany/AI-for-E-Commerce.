@@ -2,6 +2,7 @@
 
 import ast
 import importlib
+import re
 import tomllib
 from decimal import Decimal
 from pathlib import Path
@@ -22,17 +23,29 @@ from commerce_ai.domain import (
     CatalogProviderError,
     CatalogSearchResult,
     CatalogSourceMode,
+    ChatTurnResult,
     CountryCode,
     CurrencyCode,
     DomainError,
+    LLMMessage,
+    LLMProviderError,
+    LLMRequest,
+    LLMResponse,
     OfferValidationError,
     ProductOffer,
     RankedOffer,
     RankingResult,
     SearchIntent,
+    SessionState,
+    SessionStoreError,
+    SessionTurn,
     StoreFilter,
     StoreId,
+    TurnAction,
+    TurnStatus,
+    TurnTelemetry,
 )
+from commerce_ai.domain.ports import LLMClient, SessionRepository
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
@@ -57,14 +70,18 @@ def _make_offer_payload(**overrides: object) -> dict[str, object]:
 
 
 def test_package_scaffold_and_pyproject_contract() -> None:
-    """T1.1 — Phase 1 package imports and pyproject.toml contracts are present."""
+    """T1.1 — Phase 1 & Phase 2 package imports and pyproject.toml contracts are present."""
     for module_name in (
         "commerce_ai",
         "commerce_ai.config",
         "commerce_ai.domain",
+        "commerce_ai.agent",
         "commerce_ai.adapters",
         "commerce_ai.adapters.catalog",
         "commerce_ai.adapters.cache",
+        "commerce_ai.adapters.llm",
+        "commerce_ai.adapters.session",
+        "commerce_ai.api",
     ):
         imported = importlib.import_module(module_name)
         assert imported is not None
@@ -73,9 +90,13 @@ def test_package_scaffold_and_pyproject_contract() -> None:
         "src/commerce_ai/__init__.py",
         "src/commerce_ai/config/__init__.py",
         "src/commerce_ai/domain/__init__.py",
+        "src/commerce_ai/agent/__init__.py",
         "src/commerce_ai/adapters/__init__.py",
         "src/commerce_ai/adapters/catalog/__init__.py",
         "src/commerce_ai/adapters/cache/__init__.py",
+        "src/commerce_ai/adapters/llm/__init__.py",
+        "src/commerce_ai/adapters/session/__init__.py",
+        "src/commerce_ai/api/__init__.py",
         "tests/__init__.py",
         "tests/unit/__init__.py",
         "tests/integration/__init__.py",
@@ -86,9 +107,26 @@ def test_package_scaffold_and_pyproject_contract() -> None:
     project = pyproject["project"]
     assert project["requires-python"] == ">=3.11"
 
-    runtime_deps = " ".join(project["dependencies"]).lower()
-    for pkg in ("pydantic", "pydantic-settings", "httpx", "redis"):
-        assert pkg in runtime_deps
+    runtime_pkg_names = {
+        re.split(r"[<>=\[!;\s]", dep.strip().lower(), maxsplit=1)[0]
+        for dep in project["dependencies"]
+    }
+    for pkg in (
+        "pydantic",
+        "pydantic-settings",
+        "httpx",
+        "redis",
+        "fastapi",
+        "uvicorn",
+        "langgraph",
+        "sqlalchemy",
+        "aiosqlite",
+        "asyncpg",
+    ):
+        assert pkg in runtime_pkg_names
+
+    for forbidden_sdk in ("litellm", "google-genai", "openai", "groq", "boto3"):
+        assert forbidden_sdk not in runtime_pkg_names
 
     dev_deps = " ".join(pyproject["dependency-groups"]["dev"]).lower()
     for pkg in ("pytest", "pytest-asyncio", "fakeredis", "ruff", "mypy"):
@@ -151,40 +189,102 @@ def test_app_settings_defaults_and_env_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T1.4 — AppSettings defaults and loading .env copied from backend/.env.example."""
+    """T1.2 — AppSettings defaults, Phase 2 fields, CORS parsing, and .env.example loading."""
     for env_var in (
+        "APP_ENV",
+        "LOG_LEVEL",
         "SERPER_API_KEY",
         "REDIS_URL",
         "CATALOG_MODE",
         "CACHE_TTL_SECONDS",
         "SERPER_TIMEOUT_SECONDS",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "OPENAI_API_KEY",
+        "LLM_MODE",
+        "EXPLAIN_MODE",
+        "LLM_PRIMARY_MODEL",
+        "LLM_FALLBACK_MODEL",
+        "LLM_TIMEOUT_SECONDS",
+        "GUARDRAIL_MAX_CHARS",
+        "DATABASE_URL",
+        "SESSION_TTL_SECONDS",
+        "SESSION_MAX_TURNS",
+        "CORS_ALLOWED_ORIGINS",
+        "RATE_LIMIT_RPM",
     ):
         monkeypatch.delenv(env_var, raising=False)
 
     defaults = AppSettings(_env_file=None)
+    assert defaults.app_env == "development"
+    assert defaults.log_level == "INFO"
     assert defaults.catalog_mode == "auto"
     assert defaults.cache_ttl_seconds == 1800
     assert defaults.serper_timeout_seconds == 2.0
     assert defaults.serper_api_key is None
     assert defaults.redis_url is None
     assert defaults.scoring == ScoringConfig()
+    assert defaults.gemini_api_key is None
+    assert defaults.groq_api_key is None
+    assert defaults.openai_api_key is None
+    assert defaults.llm_mode == "auto"
+    assert defaults.explain_mode == "auto"
+    assert defaults.llm_primary_model == "gemini/gemini-2.5-flash"
+    assert defaults.llm_fallback_model == "groq/llama-3.3-70b-versatile"
+    assert defaults.llm_timeout_seconds == 8.0
+    assert defaults.guardrail_max_chars == 1000
+    assert defaults.database_url == "sqlite+aiosqlite:///./commerce_ai.db"
+    assert defaults.session_ttl_seconds == 86400
+    assert defaults.session_max_turns == 10
+    assert defaults.cors_allowed_origins == ["http://localhost:3000"]
+    assert defaults.rate_limit_rpm == 60
 
     env_copy = tmp_path / ".env"
     example_text = (BACKEND_DIR / ".env.example").read_text(encoding="utf-8")
-    env_copy.write_text(
-        example_text.replace("SERPER_API_KEY=", "SERPER_API_KEY=test-key-xyz   # inline note"),
-        encoding="utf-8",
+    env_text = (
+        example_text.replace("SERPER_API_KEY=", "SERPER_API_KEY=test-key-xyz   # inline note")
+        .replace("GEMINI_API_KEY=", "GEMINI_API_KEY=gem-key-abc   # gemini note")
+        .replace(
+            "CORS_ALLOWED_ORIGINS=http://localhost:3000",
+            "CORS_ALLOWED_ORIGINS=http://localhost:3000, https://shop.example.com  # origins",
+        )
+        .replace(
+            "DATABASE_URL=sqlite+aiosqlite:///./commerce_ai.db",
+            "DATABASE_URL=postgresql+asyncpg://commerce:dbsecret@postgres:5432/commerce_ai",
+        )
     )
+    env_copy.write_text(env_text, encoding="utf-8")
 
     loaded = AppSettings(_env_file=env_copy)
+    assert loaded.app_env == "development"
+    assert loaded.log_level == "INFO"
     assert loaded.catalog_mode == "auto"
     assert loaded.cache_ttl_seconds == 1800
     assert loaded.serper_timeout_seconds == 2.0
     assert loaded.redis_url is None
     assert loaded.serper_api_key is not None
     assert loaded.serper_api_key.get_secret_value() == "test-key-xyz"
+    assert loaded.gemini_api_key is not None
+    assert loaded.gemini_api_key.get_secret_value() == "gem-key-abc"
+    assert loaded.cors_allowed_origins == ["http://localhost:3000", "https://shop.example.com"]
+    assert loaded.database_url == "postgresql+asyncpg://commerce:dbsecret@postgres:5432/commerce_ai"
     assert "test-key-xyz" not in repr(loaded)
     assert "test-key-xyz" not in str(loaded)
+    assert "gem-key-abc" not in repr(loaded)
+    assert "dbsecret" not in repr(loaded)
+    assert "dbsecret" not in str(loaded)
+    assert "dbsecret" not in str(loaded.model_dump())
+    assert "dbsecret" not in loaded.model_dump_json()
+
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        '["http://localhost:3000", "https://admin.example.com"]  # json array',
+    )
+    json_cors_settings = AppSettings(_env_file=None)
+    assert json_cors_settings.cors_allowed_origins == [
+        "http://localhost:3000",
+        "https://admin.example.com",
+    ]
 
 
 def test_domain_error_hierarchy() -> None:
@@ -290,11 +390,18 @@ def test_product_offer_accepts_regional_and_attributed_google_urls() -> None:
 
 
 def test_search_intent_normalized_cache_key() -> None:
-    """T1.9 — normalized_cache_key produces canonical lowercase keys for Arabic & English."""
+    """T1.3 — SearchIntent Arabic folding, catalog_cache_key(), and normalized_cache_key()."""
     ar_a = SearchIntent(query="  سماعة   أنكر! ", country=CountryCode.EG)
     ar_b = SearchIntent(query="سَمَاعَةُ أنْكَر", country=CountryCode.EG)
-    assert ar_a.normalized_cache_key() == ar_b.normalized_cache_key()
-    assert ar_a.normalized_cache_key() == "eg:both:سماعة-أنكر:none:none"
+    ar_c = SearchIntent(query="سماعه انكر", country=CountryCode.EG)
+    assert ar_a.catalog_cache_key() == ar_b.catalog_cache_key() == ar_c.catalog_cache_key()
+    assert ar_a.catalog_cache_key() == "eg:both:ar:سماعه-انكر"
+    assert ar_a.normalized_cache_key() == ar_b.normalized_cache_key() == ar_c.normalized_cache_key()
+    assert ar_a.normalized_cache_key() == "eg:both:ar:سماعه-انكر:none:none"
+
+    ortho_a = SearchIntent(query="مكواة إلى أين آلة ٱختبار مبنى", country=CountryCode.EG)
+    ortho_b = SearchIntent(query="مكواه الي اين اله اختبار مبني", country=CountryCode.EG)
+    assert ortho_a.catalog_cache_key() == ortho_b.catalog_cache_key()
 
     en_a = SearchIntent(
         query=" Anker  Earbuds ",
@@ -302,6 +409,7 @@ def test_search_intent_normalized_cache_key() -> None:
         store=StoreFilter.AMAZON,
         max_budget=Decimal("500"),
         min_rating=4.5,
+        language="en",
     )
     en_b = SearchIntent(
         query="anker, earbuds!",
@@ -309,23 +417,128 @@ def test_search_intent_normalized_cache_key() -> None:
         store=StoreFilter.AMAZON,
         max_budget=Decimal("500.00"),
         min_rating=4.5,
+        language="en",
     )
+    assert en_a.catalog_cache_key() == en_b.catalog_cache_key() == "sa:amazon:en:anker-earbuds"
     assert en_a.normalized_cache_key() == en_b.normalized_cache_key()
-    assert en_a.normalized_cache_key() == "sa:amazon:anker-earbuds:500.00:4.50"
+    assert en_a.normalized_cache_key() == "sa:amazon:en:anker-earbuds:500.00:4.50"
 
     zero_rating_intent = SearchIntent(
         query="Mouse",
         country=CountryCode.AE,
         min_rating=0.0,
+        language="en",
     )
-    assert zero_rating_intent.normalized_cache_key() == "ae:both:mouse:none:0.00"
+    assert zero_rating_intent.normalized_cache_key() == "ae:both:en:mouse:none:0.00"
 
     punct_key_a = SearchIntent(query="!!!", country=CountryCode.EG).normalized_cache_key()
     punct_key_b = SearchIntent(query="???", country=CountryCode.EG).normalized_cache_key()
-    assert punct_key_a.startswith("eg:both:q-")
-    assert len(punct_key_a.split(":")[2]) == 10
+    assert punct_key_a.startswith("eg:both:ar:q-")
+    assert len(punct_key_a.split(":")[3]) == 10
     assert punct_key_a.endswith(":none:none")
     assert punct_key_a != punct_key_b
+
+
+def test_phase2_domain_models_and_enums() -> None:
+    """T1.4 — Phase 2 enums and models validate defaults and JSON round-trips."""
+    assert [m.value for m in TurnAction] == ["search", "compare", "clarify", "off_topic", "refuse"]
+    assert [m.value for m in TurnStatus] == ["ok", "clarify", "off_topic", "refused", "degraded"]
+
+    msg = LLMMessage(role="user", content="سماعة أنكر")
+    req = LLMRequest(messages=(msg,))
+    assert req.max_tokens == 350
+    assert req.temperature == 0.0
+    assert req.json_mode is False
+    assert req.task_name == "general"
+
+    resp = LLMResponse(content='{"action":"search"}', provider="gemini", model="gemini-2.5-flash")
+    assert resp.used_fallback_model is False
+
+    google_offer = ProductOffer.model_validate(
+        _make_offer_payload(url="https://www.google.com/shopping/product/123"),
+        context={"merchant_attribution": "Amazon.eg"},
+    )
+    ranked_offer = RankedOffer(
+        rank=1,
+        offer=google_offer,
+        value_score=91.5,
+        price_norm=0.9,
+        bayesian_rating=4.6,
+        match_reasons=("best_overall_value",),
+    )
+    intent = SearchIntent(query="سماعة أنكر", country=CountryCode.EG, language="ar")
+    session_state = SessionState(
+        session_id="sess-1",
+        market=CountryCode.EG,
+        last_intent=intent,
+        last_ranked_offers=[ranked_offer],
+        turns=[
+            SessionTurn(
+                role="user",
+                content="سماعة أنكر",
+                action=TurnAction.SEARCH,
+                created_at_iso="2026-11-15T12:00:00Z",
+            )
+        ],
+        updated_at_epoch=1234.5,
+    )
+    session_json = session_state.model_dump_json()
+    with pytest.raises(ValidationError):
+        SessionState.model_validate_json(session_json)
+
+    restored_session = SessionState.model_validate_json(
+        session_json,
+        context={"allow_verified_google_shopping_from_cache": True},
+    )
+    assert restored_session.session_id == "sess-1"
+    assert restored_session.last_ranked_offers[0].offer.url == (
+        "https://www.google.com/shopping/product/123"
+    )
+
+    telemetry = TurnTelemetry(llm_calls=1, catalog_called=True, catalog_cache_hit=False)
+    turn_result = ChatTurnResult(
+        session_id="sess-1",
+        status=TurnStatus.OK,
+        reply="إليك أفضل ٣ عروض",
+        action=TurnAction.SEARCH,
+        active_intent=intent,
+        top_offers=[ranked_offer],
+        telemetry=telemetry,
+    )
+    restored_turn = ChatTurnResult.model_validate_json(
+        turn_result.model_dump_json(),
+        context={"allow_verified_google_shopping_from_cache": True},
+    )
+    assert restored_turn == turn_result
+
+
+def test_phase2_errors_and_ports() -> None:
+    """T1.5 — LLMProviderError, SessionStoreError, and @runtime_checkable Phase 2 ports."""
+    assert issubclass(LLMProviderError, DomainError)
+    assert issubclass(SessionStoreError, DomainError)
+
+    err = LLMProviderError(provider="gemini", retriable=True, reason="rate limited")
+    assert err.provider == "gemini"
+    assert err.retriable is True
+    assert err.reason == "rate limited"
+    assert str(err) == "[gemini] (retriable=True): rate limited"
+
+    class _DummyLLM:
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            return LLMResponse(content="ok", provider="dummy", model="dummy-1")
+
+    class _DummySessionRepo:
+        async def get_session(self, session_id: str) -> SessionState | None:
+            return None
+
+        async def save_session(self, state: SessionState, ttl_seconds: int = 86400) -> None:
+            return None
+
+        async def delete_session(self, session_id: str) -> None:
+            return None
+
+    assert isinstance(_DummyLLM(), LLMClient)
+    assert isinstance(_DummySessionRepo(), SessionRepository)
 
 
 def test_ranking_and_catalog_result_models() -> None:
@@ -359,11 +572,24 @@ def test_ranking_and_catalog_result_models() -> None:
 
 
 def test_hexagonal_boundary_no_vendor_imports() -> None:
-    """T1.11 — config/ and domain/ import zero vendor or adapter packages."""
-    forbidden = {"httpx", "redis", "serper", "langfuse", "boto3"}
+    """T1.15 — config/, domain/, and agent/ import zero vendor or adapter packages."""
+    forbidden = {
+        "httpx",
+        "redis",
+        "serper",
+        "langfuse",
+        "boto3",
+        "sqlalchemy",
+        "fastapi",
+        "litellm",
+        "openai",
+        "groq",
+        "google",
+    }
     target_dirs = [
         BACKEND_DIR / "src" / "commerce_ai" / "config",
         BACKEND_DIR / "src" / "commerce_ai" / "domain",
+        BACKEND_DIR / "src" / "commerce_ai" / "agent",
     ]
     for directory in target_dirs:
         for py_file in directory.rglob("*.py"):
@@ -418,29 +644,69 @@ def test_market_registry_rejects_unknown_market_and_foreign_merchants() -> None:
 def test_app_settings_secret_masking_and_invalid_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T3.3 — AppSettings normalizes blank env vars, rejects bad scalars, and masks secrets."""
+    """T3.1 — AppSettings normalizes blanks, rejects bad bounds, and masks secrets/URLs."""
     monkeypatch.setenv("SERPER_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "   ")
+    monkeypatch.setenv("GROQ_API_KEY", "  # only comment")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("LLM_FALLBACK_MODEL", "   ")
     monkeypatch.setenv("REDIS_URL", "   ")
     monkeypatch.setenv("CATALOG_MODE", "seed  # forced seed")
 
     settings = AppSettings(_env_file=None)
     assert settings.serper_api_key is None
+    assert settings.gemini_api_key is None
+    assert settings.groq_api_key is None
+    assert settings.openai_api_key is None
+    assert settings.llm_fallback_model is None
     assert settings.redis_url is None
     assert settings.catalog_mode == "seed"
 
+    raw_redis = "redis://:redis-pass-secret@redis.internal:6379/0"
+    raw_db = "postgresql+asyncpg://commerce:pg-pass-secret@db.internal:5432/commerce_ai"
     masked = AppSettings(
         _env_file=None,
         serper_api_key=SecretStr("super-serper-secret"),
-        redis_url="redis://:redis-pass-secret@redis.internal:6379/0",
+        gemini_api_key=SecretStr("super-gemini-secret"),
+        groq_api_key=SecretStr("super-groq-secret"),
+        openai_api_key=SecretStr("super-openai-secret"),
+        redis_url=raw_redis,
+        database_url=raw_db,
     )
-    assert "super-serper-secret" not in repr(masked)
-    assert "super-serper-secret" not in str(masked)
-    assert "redis-pass-secret" not in repr(masked)
-    assert "redis-pass-secret" not in str(masked)
+    assert masked.redis_url == raw_redis
+    assert masked.database_url == raw_db
+
+    for secret in (
+        "super-serper-secret",
+        "super-gemini-secret",
+        "super-groq-secret",
+        "super-openai-secret",
+        "redis-pass-secret",
+        "pg-pass-secret",
+    ):
+        assert secret not in repr(masked)
+        assert secret not in str(masked)
+        assert secret not in str(masked.model_dump())
+        assert secret not in masked.model_dump_json()
+
+    dumped = masked.model_dump()
+    assert dumped["redis_url"] == "redis://:***@redis.internal:6379/0"
+    assert (
+        dumped["database_url"] == "postgresql+asyncpg://commerce:***@db.internal:5432/commerce_ai"
+    )
     assert "***" in repr(masked)
+
     summary = masked.safe_summary()
     assert summary["serper_api_key"] == "***"
+    assert summary["gemini_api_key"] == "***"
+    assert summary["groq_api_key"] == "***"
+    assert summary["openai_api_key"] == "***"
+    assert summary["redis_url"] == "redis://:***@redis.internal:6379/0"
+    assert (
+        summary["database_url"] == "postgresql+asyncpg://commerce:***@db.internal:5432/commerce_ai"
+    )
     assert "redis-pass-secret" not in str(summary)
+    assert "pg-pass-secret" not in str(summary)
 
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None, catalog_mode="invalid")  # type: ignore[arg-type]
@@ -448,6 +714,24 @@ def test_app_settings_secret_masking_and_invalid_values(
         AppSettings(_env_file=None, cache_ttl_seconds=0)
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None, serper_timeout_seconds=-1.0)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, guardrail_max_chars=10)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, guardrail_max_chars=4001)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, session_max_turns=1)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, session_max_turns=51)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, rate_limit_rpm=-1)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, llm_timeout_seconds=0.0)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, session_ttl_seconds=0)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, database_url="   ")
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None, llm_primary_model="")
 
     bad_port_redacted = redact_url_password("redis://:sec-ret@127.0.0.1:badport/0")
     assert bad_port_redacted is not None
@@ -680,7 +964,7 @@ def test_google_shopping_url_attribution_validation_and_cache_roundtrip() -> Non
 
 
 def test_search_intent_validation_edge_cases() -> None:
-    """T3.9 — SearchIntent rejects invalid constraints and normalizes punctuation/diacritics."""
+    """T3.2 — SearchIntent separates ar/en, folds Arabic orthography, and hashes punctuation."""
     for bad_query in ("", "   "):
         with pytest.raises(ValidationError):
             SearchIntent(query=bad_query, country=CountryCode.EG)
@@ -693,17 +977,83 @@ def test_search_intent_validation_edge_cases() -> None:
         with pytest.raises(ValidationError):
             SearchIntent(query="AirPods", country=CountryCode.AE, min_rating=bad_rating)
 
-    k1 = SearchIntent(
+    ar_v1 = SearchIntent(
         query="  سَمَاعَةُ: أنْكَر؟! ",
         country=CountryCode.EG,
         store=StoreFilter.NOON,
-    ).normalized_cache_key()
-    k2 = SearchIntent(
-        query="سماعة أنكر",
+        language="ar",
+    )
+    ar_v2 = SearchIntent(
+        query="سماعه انكر",
         country=CountryCode.EG,
         store=StoreFilter.NOON,
-    ).normalized_cache_key()
-    assert k1 == k2
+        language="ar",
+    )
+    assert ar_v1.catalog_cache_key() == ar_v2.catalog_cache_key()
+    assert ar_v1.normalized_cache_key() == ar_v2.normalized_cache_key()
+
+    en_same_query = SearchIntent(
+        query="سماعه انكر",
+        country=CountryCode.EG,
+        store=StoreFilter.NOON,
+        language="en",
+    )
+    assert en_same_query.catalog_cache_key() != ar_v2.catalog_cache_key()
+    assert en_same_query.normalized_cache_key() != ar_v2.normalized_cache_key()
+
+    punct_a = SearchIntent(query="...", country=CountryCode.EG).catalog_cache_key()
+    punct_b = SearchIntent(query="---", country=CountryCode.EG).catalog_cache_key()
+    assert punct_a.startswith("eg:both:ar:q-")
+    assert punct_a != punct_b
+
+
+def test_phase2_models_reject_invalid_bounds() -> None:
+    """T3.3 — Phase 2 domain models reject invalid bounds and extra fields."""
+    valid_msg = LLMMessage(role="user", content="hello")
+    with pytest.raises(ValidationError):
+        LLMRequest(messages=())
+    with pytest.raises(ValidationError):
+        LLMRequest(messages=(valid_msg,), max_tokens=0)
+    with pytest.raises(ValidationError):
+        LLMRequest(messages=(valid_msg,), max_tokens=1025)
+    with pytest.raises(ValidationError):
+        LLMRequest(messages=(valid_msg,), temperature=1.1)
+    with pytest.raises(ValidationError):
+        TurnTelemetry(llm_calls=3)
+    with pytest.raises(ValidationError):
+        TurnTelemetry(llm_calls=-1)
+    with pytest.raises(ValidationError):
+        SessionState(session_id="   ")
+
+    with pytest.raises(ValidationError):
+        LLMMessage(role="user", content="hi", extra_field="bad")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        LLMRequest(messages=(valid_msg,), extra_field="bad")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        LLMResponse(
+            content="ok",
+            provider="gemini",
+            model="m",
+            extra_field="bad",  # type: ignore[call-arg]
+        )
+    with pytest.raises(ValidationError):
+        SessionTurn(
+            role="user",
+            content="hi",
+            created_at_iso="2026-11-15T12:00:00Z",
+            extra_field="bad",  # type: ignore[call-arg]
+        )
+    with pytest.raises(ValidationError):
+        TurnTelemetry(extra_field="bad")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        ChatTurnResult(
+            session_id="s1",
+            status=TurnStatus.OK,
+            reply="ok",
+            action=TurnAction.SEARCH,
+            telemetry=TurnTelemetry(),
+            extra_field="bad",  # type: ignore[call-arg]
+        )
 
 
 def test_ranked_offer_rejects_out_of_bounds() -> None:

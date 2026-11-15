@@ -1,12 +1,13 @@
 """Typed runtime configuration loaded safely via pydantic-settings."""
 
+import json
 import re
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, ValidationInfo, field_serializer, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from commerce_ai.config.scoring import ScoringConfig
 
@@ -73,6 +74,9 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    app_env: Literal["development", "staging", "production"] = "development"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
     serper_api_key: SecretStr | None = None
     redis_url: str | None = None
     catalog_mode: Literal["auto", "seed", "serper"] = "auto"
@@ -80,9 +84,33 @@ class AppSettings(BaseSettings):
     serper_timeout_seconds: float = Field(default=2.0, gt=0.0, allow_inf_nan=False)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
 
-    @field_validator("serper_api_key", mode="before")
+    gemini_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    llm_mode: Literal["auto", "fake", "live"] = "auto"
+    explain_mode: Literal["auto", "llm", "template"] = "auto"
+    llm_primary_model: str = "gemini/gemini-2.5-flash"
+    llm_fallback_model: str | None = "groq/llama-3.3-70b-versatile"
+    llm_timeout_seconds: float = Field(default=8.0, gt=0.0, allow_inf_nan=False)
+    guardrail_max_chars: int = Field(default=1000, ge=50, le=4000)
+
+    database_url: str = "sqlite+aiosqlite:///./commerce_ai.db"
+    session_ttl_seconds: int = Field(default=86400, gt=0)
+    session_max_turns: int = Field(default=10, ge=2, le=50)
+    cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+    rate_limit_rpm: int = Field(default=60, ge=0)
+
+    @field_validator(
+        "serper_api_key",
+        "gemini_api_key",
+        "groq_api_key",
+        "openai_api_key",
+        mode="before",
+    )
     @classmethod
-    def _clean_serper_api_key(cls, value: Any) -> Any:
+    def _clean_optional_secret(cls, value: Any) -> Any:
         if isinstance(value, SecretStr):
             return None if not value.get_secret_value().strip() else value
         if isinstance(value, str):
@@ -90,24 +118,81 @@ class AppSettings(BaseSettings):
             return None if cleaned == "" else cleaned
         return value
 
-    @field_validator("redis_url", mode="before")
+    @field_validator("redis_url", "llm_fallback_model", mode="before")
     @classmethod
-    def _clean_redis_url(cls, value: Any) -> Any:
+    def _clean_optional_str(cls, value: Any) -> Any:
         if isinstance(value, str):
             cleaned = _strip_inline_comment(value)
             return None if cleaned == "" else cleaned
         return value
 
-    @field_validator("catalog_mode", "cache_ttl_seconds", "serper_timeout_seconds", mode="before")
+    @field_validator("database_url", "llm_primary_model", mode="before")
+    @classmethod
+    def _clean_required_non_empty_str(cls, value: Any, info: ValidationInfo) -> Any:
+        if isinstance(value, str):
+            cleaned = _strip_inline_comment(value)
+            if not cleaned:
+                raise ValueError(f"{info.field_name} must not be empty")
+            return cleaned
+        return value
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _clean_cors_allowed_origins(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            cleaned = _strip_inline_comment(value)
+            if not cleaned:
+                return []
+            if cleaned.startswith("["):
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("cors_allowed_origins must be valid JSON or CSV") from exc
+                if not isinstance(parsed, list) or not all(
+                    isinstance(item, str) for item in parsed
+                ):
+                    raise ValueError("cors_allowed_origins JSON must be a list of strings")
+                return [item.strip() for item in parsed if item.strip()]
+            return [part.strip() for part in cleaned.split(",") if part.strip()]
+        if isinstance(value, (list, tuple)):
+            origins: list[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    raise ValueError("cors_allowed_origins items must be strings")
+                cleaned_item = _strip_inline_comment(item)
+                if cleaned_item:
+                    origins.append(cleaned_item)
+            return origins
+        return value
+
+    @field_validator(
+        "app_env",
+        "log_level",
+        "catalog_mode",
+        "llm_mode",
+        "explain_mode",
+        "cache_ttl_seconds",
+        "serper_timeout_seconds",
+        "llm_timeout_seconds",
+        "guardrail_max_chars",
+        "session_ttl_seconds",
+        "session_max_turns",
+        "rate_limit_rpm",
+        mode="before",
+    )
     @classmethod
     def _clean_scalar_env_str(cls, value: Any) -> Any:
         if isinstance(value, str):
             return _strip_inline_comment(value)
         return value
 
+    @field_serializer("redis_url", "database_url", when_used="always")
+    def _serialize_redacted_url(self, value: str | None) -> str | None:
+        return redact_url_password(value)
+
     def __repr_args__(self) -> Iterator[tuple[str | None, Any]]:
         for name, value in super().__repr_args__():
-            if name == "redis_url" and isinstance(value, str):
+            if name in {"redis_url", "database_url"} and isinstance(value, str):
                 yield name, redact_url_password(value)
             else:
                 yield name, value
@@ -115,10 +200,26 @@ class AppSettings(BaseSettings):
     def safe_summary(self) -> dict[str, Any]:
         """Return a credential-redacted configuration dictionary safe for diagnostics/logs."""
         return {
+            "app_env": self.app_env,
+            "log_level": self.log_level,
             "serper_api_key": "***" if self.serper_api_key is not None else None,
+            "gemini_api_key": "***" if self.gemini_api_key is not None else None,
+            "groq_api_key": "***" if self.groq_api_key is not None else None,
+            "openai_api_key": "***" if self.openai_api_key is not None else None,
             "redis_url": redact_url_password(self.redis_url),
+            "database_url": redact_url_password(self.database_url),
             "catalog_mode": self.catalog_mode,
+            "llm_mode": self.llm_mode,
+            "explain_mode": self.explain_mode,
+            "llm_primary_model": self.llm_primary_model,
+            "llm_fallback_model": self.llm_fallback_model,
+            "llm_timeout_seconds": self.llm_timeout_seconds,
+            "guardrail_max_chars": self.guardrail_max_chars,
             "cache_ttl_seconds": self.cache_ttl_seconds,
             "serper_timeout_seconds": self.serper_timeout_seconds,
+            "session_ttl_seconds": self.session_ttl_seconds,
+            "session_max_turns": self.session_max_turns,
+            "cors_allowed_origins": list(self.cors_allowed_origins),
+            "rate_limit_rpm": self.rate_limit_rpm,
             "scoring": self.scoring.model_dump(),
         }

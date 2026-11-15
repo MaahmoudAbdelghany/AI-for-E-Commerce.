@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/2-agent-and-api`
 - **Roadmap section**: `spec/roadmap.md` → Phase 2
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 2)
-- **Status**: Approved (Phase Gate 1)
+- **Status**: Implementing
 
 ---
 
@@ -23,7 +23,7 @@ Once Phase 2 is complete, the backend resolves Arabic and English shopping queri
 
 | Order | Roadmap ID | Folder | Size | Status | Depends on |
 |:---|:---|:---|:---|:---|:---|
-| 1 | Feature 2.1 | `spec/features/feature-201-llm-routing-guardrails-intent/` | M | ⏳ Spec ready | Phase 1 |
+| 1 | Feature 2.1 | `spec/features/feature-201-llm-routing-guardrails-intent/` | M | ✅ Done | Phase 1 |
 | 2 | Feature 2.2 | `spec/features/feature-202-langgraph-workflow-and-session/` | M | ⏳ Spec ready | Feature 2.1 |
 | 3 | Feature 2.3 | `spec/features/feature-203-fastapi-service-and-contracts/` | M | ⏳ Spec ready | Feature 2.1, Feature 2.2 |
 
@@ -224,7 +224,7 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 
 | Feature | Subagent result | Validation | Local commit | Notes |
 |:---|:---|:---|:---|:---|
-| Feature 2.1 | ⏳ Pending Phase Gate 1 | — | — | Includes folded Phase 1 cache/settings follow-ups (`P1`) |
+| Feature 2.1 | ✅ Implemented (`impl-201`) & verified (`verifier`, #27) | ✅ `102 passed, 1 deselected in 1.87s` (`pytest -v`; `64 passed` targeted; `1 skipped` `-m live`), `ruff check` & `ruff format --check` clean (`44` files), `mypy src` clean (`31` files), `uv lock --check` clean | `feat(agent): implement Feature 2.1 LLM routing, guardrails, and bilingual intent extraction` | Folded Phase 1 cache/settings follow-ups (`P1`), upfront Phase 2 deps/scaffolds (`P7`), async `httpx` multi-provider `LLMClient` (`P2`), pre-LLM guardrails & bilingual intent extraction (`P3`) |
 | Feature 2.2 | ⏳ Pending Phase Gate 1 | — | — | Depends on Feature 2.1 |
 | Feature 2.3 | ⏳ Pending Phase Gate 1 | — | — | Depends on Features 2.1 & 2.2 |
 | Phase Integration & Deep Review | ⏳ Pending Phase Gate 1 | — | — | `tests/integration/test_phase2_e2e.py` + 4-lens deep review |
