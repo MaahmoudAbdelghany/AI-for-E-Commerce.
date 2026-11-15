@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-202-langgraph-workflow-and-session/`
 - **Phase branch**: `phase/2-agent-and-api`
 - **Size**: Medium (4 cohesive execution groups spanning async memory & SQLAlchemy session persistence with automatic fallback, grounded prompts & zero-token bilingual templates, the bounded `LangGraph` workflow `ShoppingAssistantWorkflow`, and offline deterministic unit/integration suites)
-- **Status**: Approved (Gate 1)
+- **Status**: Committed
 
 ---
 
