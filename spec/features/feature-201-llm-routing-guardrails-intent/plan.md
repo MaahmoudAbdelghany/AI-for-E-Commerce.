@@ -20,7 +20,7 @@ This serves [spec/mission.md](../../mission.md) (§4–§7: `<= $0.002` per unca
 
 ### In scope
 - **Upfront Phase 2 Package Scaffold & Dependencies (`P7`)**:
-  - Update `backend/pyproject.toml` and `backend/uv.lock` to declare ALL Phase 2 runtime dependencies upfront (`fastapi>=0.115,<1.0`, `uvicorn[standard]>=0.32,<1.0`, `langgraph>=0.2,<1.0`, `sqlalchemy>=2.0,<3.0`, `aiosqlite>=0.20,<1.0`, `asyncpg>=0.30,<1.0`) while preserving Phase 1 dependencies, `addopts = ["-m", "not live"]`, `asyncio_mode = "auto"`, `ruff`, and strict `mypy` (with a minimal targeted `[[tool.mypy.overrides]]` for `asyncpg`/`asyncpg.*` lacking stubs, after proactive `mypy --strict` verified all other Phase 2 dependencies resolve cleanly), and keeping zero heavy LLM SDKs (`litellm`, `google-genai`, `openai`, `groq`, `boto3`).
+  - Update `backend/pyproject.toml` and `backend/uv.lock` to declare ALL Phase 2 runtime dependencies upfront (`fastapi>=0.115,<1.0`, `uvicorn[standard]>=0.32,<1.0`, `langgraph>=0.2,<1.0`, `sqlalchemy[asyncio]>=2.0,<3.0`, `aiosqlite>=0.20,<1.0`, `asyncpg>=0.30,<1.0`) while preserving Phase 1 dependencies, `addopts = ["-m", "not live"]`, `asyncio_mode = "auto"`, `ruff`, and strict `mypy` (with a minimal targeted `[[tool.mypy.overrides]]` for `asyncpg`/`asyncpg.*` lacking stubs, after proactive `mypy --strict` verified all other Phase 2 dependencies resolve cleanly), and keeping zero heavy LLM SDKs (`litellm`, `google-genai`, `openai`, `groq`, `boto3`).
   - Create lightweight package `__init__.py` markers (`commerce_ai/agent/__init__.py`, `commerce_ai/adapters/llm/__init__.py`, `commerce_ai/adapters/session/__init__.py`, `commerce_ai/api/__init__.py`) without eager imports of Feature 2.2/2.3 modules.
 - **Folded Phase 1 Hardening Backlog & Phase 2 Contracts (`P1`)**:
   - `config/settings.py` (`AppSettings`): add all Phase 2 operational, LLM, guardrail, session, CORS, and rate-limit fields; strip inline `#` comments and parse comma-separated or JSON `cors_allowed_origins` cleanly; add `@field_serializer("redis_url", "database_url", when_used="always")` calling `redact_url_password(...)` for `model_dump()` and `model_dump_json()` (while preserving raw `str | None`/`str` attribute access and masking `database_url` in `__repr_args__()`), and expand `safe_summary()`.
@@ -189,7 +189,7 @@ flowchart LR
 
 | Path | Change | Purpose |
 |:---|:---|:---|
-| `backend/pyproject.toml` | Modify | Declare all Phase 2 runtime dependencies upfront (`fastapi`, `uvicorn[standard]`, `langgraph`, `sqlalchemy`, `aiosqlite`, `asyncpg`) plus narrow `[[tool.mypy.overrides]]` (`asyncpg`, `asyncpg.*`) (`P7`) |
+| `backend/pyproject.toml` | Modify | Declare all Phase 2 runtime dependencies upfront (`fastapi`, `uvicorn[standard]`, `langgraph`, `sqlalchemy[asyncio]`, `aiosqlite`, `asyncpg`) plus narrow `[[tool.mypy.overrides]]` (`asyncpg`, `asyncpg.*`) (`P7`) |
 | `backend/uv.lock` | Modify | Lock Phase 2 dependencies deterministically (`uv sync --directory backend --all-extras --dev`) |
 | `backend/src/commerce_ai/agent/__init__.py` | Create | Package scaffold for Phase 2 agent (`P7`) |
 | `backend/src/commerce_ai/adapters/llm/__init__.py` | Create | Package scaffold & exports for LLM adapters (`P7`) |

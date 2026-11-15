@@ -84,7 +84,7 @@ Feature 2.2 consumes locked contracts from Phase 1 (Features 1.1–1.3) and Feat
   - `GuardrailResult` (`allowed`, `sanitized_message`, `reason_code`, `language`) and `check_input_guardrails(message: str, *, max_chars: int = 1000) -> GuardrailResult`.
   - `IntentExtractionResult` (`action`, `intent`, `language`, `clarification_question`, `used_rule_fallback`, `llm_calls_used`, `degraded_reason`) and `extract_turn_intent(...) -> IntentExtractionResult`.
 - **Dependencies & Scaffolds (`backend/pyproject.toml`, `__init__.py`)**:
-  - `langgraph`, `sqlalchemy`, `aiosqlite`, `asyncpg`, `agent/__init__.py`, and `adapters/session/__init__.py` pre-declared in Feature 2.1 (`P7`).
+  - `langgraph`, `sqlalchemy[asyncio]`, `aiosqlite`, `asyncpg`, `agent/__init__.py`, and `adapters/session/__init__.py` pre-declared in Feature 2.1 (`P7`).
 
 ### Invariants Enforced
 - `INV-01`: Zero credentials in logs or `SessionStoreError` messages (`redact_url_password`).
