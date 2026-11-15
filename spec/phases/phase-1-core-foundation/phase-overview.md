@@ -25,7 +25,7 @@ Once Phase 1 is complete, the engine can deterministically search, cache, filter
 |:---|:---|:---|:---|:---|:---|
 | 1 | Feature 1.1 | `spec/features/feature-101-backend-scaffold-domain-models/` | M | ✅ Done | — |
 | 2 | Feature 1.2 | `spec/features/feature-102-deterministic-value-ranking/` | M | ✅ Done | Feature 1.1 |
-| 3 | Feature 1.3 | `spec/features/feature-103-pluggable-catalog-and-cache/` | M | ⏳ Spec ready | Feature 1.1 |
+| 3 | Feature 1.3 | `spec/features/feature-103-pluggable-catalog-and-cache/` | M | ✅ Done | Feature 1.1 |
 
 **Merge/split decisions made during the interview**: None — the three Phase 1 roadmap items map cleanly to bounded, non-overlapping modules and remain three Medium (`M`) features executed in **Phase mode** (none touch `infra/aws/**`, `.github/workflows/**`, `config/security*`, or `migrations/**`).
 
@@ -238,3 +238,4 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 |:---|:---|:---|:---|:---|
 | Feature 1.1 | ✅ Implemented (`impl-101`) & verified (`verifier`) | ✅ 22 passed (`pytest`), `ruff check`, `ruff format --check`, `mypy src` clean | `feat(domain): implement Feature 1.1 backend scaffold, config, and domain models` | Preserved `backend/.env.example` & `frontend/.env.example`; updated `.gitignore` Python caches; locked `backend/uv.lock` (`P7`) |
 | Feature 1.2 | ✅ Implemented (`impl-102`) & verified (`verifier`) | ✅ 18 unit tests + 63/63 full suite (`pytest`), `ruff check .`, `ruff format --check .`, `mypy src` clean | `feat(ranking): implement Feature 1.2 deterministic value scoring and trap filters` | Pure domain ranking engine (`rank_top_offers`), bilingual Stage 1/2 guards, Bayesian prior `3.4`, `P_norm=1.0` (`P3`, `P4`, `P7`) |
+| Feature 1.3 | ✅ Implemented (`impl-103`) & verified (`verifier`) | ✅ 23 unit/integration tests + 63/63 full suite (`pytest`), `ruff check .`, `ruff format --check .`, `mypy src` clean | `feat(catalog): implement Feature 1.3 pluggable catalog providers and TTL caching` | Pure `CatalogProvider`/`CacheStore` ports, `InMemoryTTLCache` + `fakeredis`-verified `RedisCacheStore`, `EG`/`SA`/`AE` bilingual seeds, single-call `SerperShoppingProvider` (`P1`, `P2`, `P5`, `P6`, `P7`) |

@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-103-pluggable-catalog-and-cache/`
 - **Phase branch**: `phase/1-core-foundation`
 - **Size**: Medium (4 cohesive execution groups spanning domain ports, dual cache stores with automatic fallback, bilingual seed datasets + provider, single-call Serper Shopping adapter, and cached decorator/factory integration)
-- **Status**: Approved (Gate 1)
+- **Status**: Committed
 
 ---
 
