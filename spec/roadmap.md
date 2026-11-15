@@ -9,7 +9,7 @@
 **Goal**: Establish a clean Python backend foundation, typed regional marketplace schemas (`EG`/`SA`/`AE`), the configurable deterministic Top-3 Value Scoring engine, and pluggable catalog/cache adapters that work both offline (`SeedCatalogProvider`) and live (`SerperShoppingProvider`).
 
 - [x] **Feature 1.1**: Backend scaffold, `pydantic-settings` config, and regional marketplace domain models (`backend/pyproject.toml`, `backend/src/commerce_ai/config/`, `backend/src/commerce_ai/domain/models.py`)
-- [ ] **Feature 1.2**: Deterministic Top-3 Value Scoring engine (normalized price + Bayesian rating) and anti-accessory/outlier filter (`backend/src/commerce_ai/domain/ranking.py`, `backend/tests/unit/test_ranking.py`)
+- [x] **Feature 1.2**: Deterministic Top-3 Value Scoring engine (normalized price + Bayesian rating) and anti-accessory/outlier filter (`backend/src/commerce_ai/domain/ranking.py`, `backend/tests/unit/test_ranking.py`)
 - [ ] **Feature 1.3**: Pluggable `CatalogProvider` & `CacheStore` interfaces, `SeedCatalogProvider` (`Noon` & `Amazon` fixtures for `EG`/`SA`/`AE`), `SerperShoppingProvider`, and TTL caching (`backend/src/commerce_ai/adapters/catalog/`, `backend/src/commerce_ai/adapters/cache/`)
 
 ---

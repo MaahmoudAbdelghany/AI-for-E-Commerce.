@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-102-deterministic-value-ranking/`
 - **Phase branch**: `phase/1-core-foundation`
 - **Size**: Medium (3 execution groups covering multi-stage bilingual/statistical filtering, Bayesian + price-normalized Top-3 scoring math, and an exhaustive offline unit/edge-case suite within an isolated domain module)
-- **Status**: Approved (Gate 1)
+- **Status**: Committed
 
 ---
 
