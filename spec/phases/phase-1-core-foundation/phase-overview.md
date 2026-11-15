@@ -206,14 +206,14 @@ All three Phase 1 features build strictly against these shared signatures:
 
 Commands match `spec/sdd-profile.md` exactly:
 
-- [ ] **PI.1** — End-to-end offline scenario (`backend/tests/integration/test_phase1_e2e.py`: `SeedCatalogProvider` → `CachedCatalogProvider` using `InMemoryTTLCache` and `fakeredis`-backed `RedisCacheStore` → `rank_top_offers`) across `EG`, `SA`, and `AE`:
+- [x] **PI.1** — End-to-end offline scenario (`backend/tests/integration/test_phase1_e2e.py`: `SeedCatalogProvider` → `CachedCatalogProvider` using `InMemoryTTLCache` and `fakeredis`-backed `RedisCacheStore` → `rank_top_offers`) across `EG`, `SA`, and `AE` — **Observed (`uv run --no-sync --directory backend pytest tests/integration/test_phase1_e2e.py -v`): `16 passed in 0.94s`**:
   - First query is a cache miss (`cache_hit=False`, `source_mode=CatalogSourceMode.SEED`); repeat normalized query is a cache hit (`cache_hit=True`) returning identical offers without re-invoking the underlying provider.
   - Seed traps (bilingual accessories, `5.0`-star `1`-review trap, unrated offers vs well-reviewed products, and `4x` overpriced scalper outliers) are handled deterministically per `P3` and `P4`, returning Top-3 `RankedOffer` items ordered by descending `value_score`.
-- [ ] **PI.2** — Full suite (100% offline deterministic pass): `uv run --directory backend pytest -v`
-- [ ] **PI.3** — Lint / format / type check:
-  - `uv run --directory backend ruff check .`
-  - `uv run --directory backend ruff format --check .`
-  - `uv run --directory backend mypy src`
+- [x] **PI.2** — Full suite (100% offline deterministic pass): `uv run --directory backend pytest -v` — **Observed (`uv run --no-sync --directory backend pytest -v`): `79 passed in 1.56s`** (16 new Phase 1 E2E tests + 4 cached catalog integration tests + 59 unit tests).
+- [x] **PI.3** — Lint / format / type check:
+  - `uv run --directory backend ruff check .` — **Observed (`uv run --no-sync --directory backend ruff check .`): `All checks passed!`**
+  - `uv run --directory backend ruff format --check .` — **Observed (`uv run --no-sync --directory backend ruff format --check .`): `30 files already formatted`**
+  - `uv run --directory backend mypy src` — **Observed (`uv run --no-sync --directory backend mypy src`): `Success: no issues found in 20 source files`**
 - [ ] **PI.4** — Extra gates (`uv run --directory backend pytest tests/evals -v`): **Status: Not Applicable** in Phase 1 — *Technical justification*: Per `spec/sdd-profile.md` and `spec/roadmap.md`, `backend/tests/evals/` becomes mandatory from Feature 4.1 onward once the `LangGraph` intent-extraction and explanation workflow exists (Phase 2); Phase 1 contains zero LLM logic and validates all seed catalog traps deterministically via unit and integration suites in `PI.1` and `PI.2`.
 
 ---
