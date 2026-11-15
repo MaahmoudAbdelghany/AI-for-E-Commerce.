@@ -12,14 +12,14 @@ Feature 1.1 is complete when `uv sync --directory backend --all-extras --dev` in
 | R1 | T1.1, T5.1, T5.2, T5.3, T5.4 |
 | R2 | T1.2, T3.1 |
 | R3 | T1.3, T3.2 |
-| R4 | T1.4, T3.3 |
+| R4 | T1.4, T1.12, T3.3, T3.12 |
 | R5 | T1.5 |
 | R6 | T1.6 |
 | R7 | T1.7, T3.4, T3.5 |
 | R8 | T1.8, T3.6, T3.7, T3.8 |
-| R9 | T1.9, T3.9 |
+| R9 | T1.9, T1.13, T3.9, T3.13 |
 | R10 | T1.10, T3.10 |
-| NFR1 | T1.4, T3.3, T3.11 |
+| NFR1 | T1.4, T1.12, T3.3, T3.11, T3.12 |
 | NFR2 | T1.11, T5.4 |
 | NFR3 | T4.1, T5.1 |
 | NFR4 | T5.2, T5.3, T5.4 |
@@ -40,6 +40,8 @@ Feature 1.1 is complete when `uv sync --directory backend --all-extras --dev` in
 - [x] T1.9 — `SearchIntent.normalized_cache_key()` outputs canonical lowercase `"{country}:{store}:{slug}:{budget}:{min_rating}"` identically across equivalent whitespace/casing inputs for both Arabic (`"  سماعة   أنكر! "`) and English (`" Anker  Earbuds "`) queries with and without `max_budget`/`min_rating` (`tests/unit/test_config_and_models.py::test_search_intent_normalized_cache_key`).
 - [x] T1.10 — `RankedOffer`, `RankingResult`, and `CatalogSearchResult` validate bounds (`rank` `1..3`, `value_score` `0..100`, `price_norm` `0..1`, `bayesian_rating` `0..5`) and survive JSON `model_dump_json()` / `model_validate_json()` round-trip (`tests/unit/test_config_and_models.py::test_ranking_and_catalog_result_models`).
 - [x] T1.11 — AST/import check verifies `src/commerce_ai/config/` and `src/commerce_ai/domain/` contain zero imports from `httpx`, `redis`, `serper`, `langfuse`, or `boto3` (`tests/unit/test_config_and_models.py::test_hexagonal_boundary_no_vendor_imports`).
+- [ ] T1.12 — **[Phase 2 Feature 2.1 Amendment — Scheduled for implementation in Feature 2.1]** `AppSettings` defines `@field_serializer("redis_url", "database_url", when_used="always")` calling `redact_url_password(...)` so `model_dump()` and `model_dump_json()` mask URL credentials consistently with `repr()`, `str()`, and `safe_summary()`, while `settings.redis_url` and `settings.database_url` retain raw connection strings for internal adapters (`tests/unit/test_config_and_models.py`).
+- [ ] T1.13 — **[Phase 2 Feature 2.1 Amendment — Scheduled for implementation in Feature 2.1]** `SearchIntent` applies Arabic orthographic folding (`أ/إ/آ/ٱ -> ا`, `ة -> ه`, `ى -> ي`), exposes `catalog_cache_key() -> str` returning `"{country}:{store}:{language}:{slug}"`, and updates `normalized_cache_key() -> str` to `"{country}:{store}:{language}:{slug}:{budget}:{min_rating}"` (`tests/unit/test_config_and_models.py`).
 
 ### Tier 2: Integration Verification
 - **Status: Not Applicable**
@@ -57,6 +59,8 @@ Feature 1.1 is complete when `uv sync --directory backend --all-extras --dev` in
 - [x] T3.9 — `SearchIntent` boundary inputs: rejects blank `query`, `max_budget <= 0`, and `min_rating` outside `[0.0, 5.0]`, while handling Arabic/English punctuation & diacritics cleanly in `normalized_cache_key()` (`tests/unit/test_config_and_models.py::test_search_intent_validation_edge_cases`).
 - [x] T3.10 — `RankedOffer` & `RankingResult` bounds: rejects `rank` outside `1..3`, `value_score` outside `0.0..100.0`, `price_norm` outside `0.0..1.0`, `bayesian_rating` outside `0.0..5.0`, and negative counts (`tests/unit/test_config_and_models.py::test_ranked_offer_rejects_out_of_bounds`).
 - [x] T3.11 — Repository hygiene & PII exclusion: inspects `backend/.env.example` and root `.gitignore` to confirm zero hardcoded keys/passwords, `.env` ignored, and Python cache patterns present, and verifies `ProductOffer`/`SearchIntent` schemas define zero payment or sensitive PII fields (`tests/unit/test_config_and_models.py::test_env_example_and_pii_exclusion`).
+- [ ] T3.12 — **[Phase 2 Feature 2.1 Amendment — Scheduled for implementation in Feature 2.1]** Abnormal `AppSettings` serialization edge cases: `model_dump()` and `model_dump_json()` mask userinfo passwords and sensitive query parameters (`?password=`, `?token=`) on `redis_url` and `database_url`, while `None` remains `None` (`tests/unit/test_config_and_models.py`).
+- [ ] T3.13 — **[Phase 2 Feature 2.1 Amendment — Scheduled for implementation in Feature 2.1]** Boundary `SearchIntent` Arabic folding & language-separation edge cases: Arabic variants (`"سماعة أنكر"` vs `"سماعه انكر"`, `"آيفون"`/`"إبريق"`/`"ٱسم"`, `"مقلاة"`/`"مقلاه"`, `"شاي"`/`"شاى"`) collapse to identical `catalog_cache_key()` and `normalized_cache_key()` slugs, `language="ar"` vs `language="en"` stay distinct, and budget/rating changes alter `normalized_cache_key()` without altering `catalog_cache_key()` (`tests/unit/test_config_and_models.py`).
 
 ### Tier 4: Regression Checks
 - [x] T4.1 — Full backend suite runs cleanly offline in `< 30 s` with zero skipped or relaxed assertions: `uv run --directory backend pytest -v` (`INV-07`).
@@ -109,3 +113,4 @@ uv run --directory backend mypy src
 | `Tier 6` (Manual / Visual) | ⏭ N/A | Headless backend Python package only; RTL UI verification begins in Phase 3 (`Feature 3.1`) |
 | `Tier 7` (API / CLI) | ⏭ N/A | No FastAPI routes or CLI entrypoint in Feature 1.1; endpoint checks begin in Phase 2 (`Feature 2.3`) |
 | `Extra Gates` (Evals) | ⏭ N/A | `tests/evals/` becomes mandatory from Feature 4.1 onward per `spec/sdd-profile.md` |
+| `T1.12`–`T1.13`, `T3.12`–`T3.13` (Phase 2 Amendment) | ⏳ Pending | Folded Phase 1 follow-ups #1 & #2 (`@field_serializer` redaction in `model_dump`/`model_dump_json`, Arabic folding, `catalog_cache_key()`, language-aware `normalized_cache_key()`); code implementation & test execution scheduled in **Phase 2 Feature 2.1** |
