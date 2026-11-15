@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/1-core-foundation`
 - **Roadmap section**: `spec/roadmap.md` → Phase 1
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 1)
-- **Status**: Approved (Phase Gate 1)
+- **Status**: Implementing
 
 ---
 
@@ -23,7 +23,7 @@ Once Phase 1 is complete, the engine can deterministically search, cache, filter
 
 | Order | Roadmap ID | Folder | Size | Status | Depends on |
 |:---|:---|:---|:---|:---|:---|
-| 1 | Feature 1.1 | `spec/features/feature-101-backend-scaffold-domain-models/` | M | ⏳ Spec ready | — |
+| 1 | Feature 1.1 | `spec/features/feature-101-backend-scaffold-domain-models/` | M | ✅ Done | — |
 | 2 | Feature 1.2 | `spec/features/feature-102-deterministic-value-ranking/` | M | ⏳ Spec ready | Feature 1.1 |
 | 3 | Feature 1.3 | `spec/features/feature-103-pluggable-catalog-and-cache/` | M | ⏳ Spec ready | Feature 1.1 |
 
@@ -236,3 +236,4 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 
 | Feature | Subagent result | Validation | Local commit | Notes |
 |:---|:---|:---|:---|:---|
+| Feature 1.1 | ✅ Implemented (`impl-101`) & verified (`verifier`) | ✅ 22 passed (`pytest`), `ruff check`, `ruff format --check`, `mypy src` clean | `feat(domain): implement Feature 1.1 backend scaffold, config, and domain models` | Preserved `backend/.env.example` & `frontend/.env.example`; updated `.gitignore` Python caches; locked `backend/uv.lock` (`P7`) |

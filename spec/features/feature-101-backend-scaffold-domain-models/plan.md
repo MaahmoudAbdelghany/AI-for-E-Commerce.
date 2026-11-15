@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-101-backend-scaffold-domain-models/`
 - **Phase branch**: `phase/1-core-foundation`
 - **Size**: Medium (4 cohesive execution groups covering Python/`uv` package scaffold, typed configuration modules, domain errors/schemas with regional URL & currency validation, and unit tests)
-- **Status**: Approved (Gate 1)
+- **Status**: Committed
 
 ---
 
