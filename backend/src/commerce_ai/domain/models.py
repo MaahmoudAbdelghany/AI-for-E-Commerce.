@@ -6,7 +6,7 @@ import unicodedata
 from collections.abc import Mapping
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -15,14 +15,45 @@ from pydantic import (
     Field,
     HttpUrl,
     PrivateAttr,
+    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
 )
+from pydantic import ValidationError as PydanticValidationError
 
 from commerce_ai.domain.errors import OfferValidationError
 
 _CENTS = Decimal("0.01")
+_HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
+
+
+def _has_control_or_whitespace(value: str) -> bool:
+    return any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def _validate_clean_url_input(value: Any, *, field_name: str) -> str:
+    if isinstance(value, HttpUrl):
+        raw = str(value)
+    elif isinstance(value, str):
+        raw = value
+    else:
+        raise OfferValidationError(f"{field_name} must be a string URL")
+    if not raw:
+        raise OfferValidationError(f"{field_name} must not be empty")
+    if _has_control_or_whitespace(raw):
+        raise OfferValidationError(
+            f"{field_name} must not contain whitespace or control characters"
+        )
+    if "\\" in raw:
+        raise OfferValidationError(f"{field_name} must not contain backslashes")
+    try:
+        _HTTP_URL_ADAPTER.validate_python(raw)
+    except PydanticValidationError as exc:
+        raise OfferValidationError(f"{field_name} must be a valid HTTP(S) URL") from exc
+    return raw
+
+
 _ARABIC_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED\u0640]")
 _NON_ALNUM_ARABIC_RE = re.compile(r"[^a-z0-9\u0621-\u064A\u0660-\u0669\u06F0-\u06F9]+")
 
@@ -96,7 +127,7 @@ class ProductOffer(BaseModel):
     currency: CurrencyCode
     store: StoreId
     country: CountryCode
-    url: HttpUrl | str
+    url: str
     rating: float | None = Field(default=None, ge=0.0, le=5.0, allow_inf_nan=False)
     review_count: int = Field(default=0, ge=0)
     image_url: str | None = None
@@ -118,18 +149,27 @@ class ProductOffer(BaseModel):
     def _validate_price(cls, value: Decimal) -> Decimal:
         return _validate_positive_currency_decimal(value, field_name="price")
 
-    @field_validator("image_url")
+    @field_validator("url", mode="before")
     @classmethod
-    def _validate_image_url(cls, value: str | None) -> str | None:
+    def _validate_url_syntax(cls, value: Any) -> str:
+        return _validate_clean_url_input(value, field_name="url")
+
+    @field_validator("image_url", mode="before")
+    @classmethod
+    def _validate_image_url(cls, value: Any) -> str | None:
         if value is None:
             return None
-        cleaned = value.strip()
-        if not cleaned:
-            raise OfferValidationError("image_url must not be blank when provided")
-        parsed = urlsplit(cleaned)
+        raw = _validate_clean_url_input(value, field_name="image_url")
+        try:
+            parsed = urlsplit(raw)
+            _ = parsed.port
+        except ValueError as exc:
+            raise OfferValidationError("image_url must be a valid https:// URL") from exc
         if parsed.scheme.lower() != "https" or not parsed.hostname:
             raise OfferValidationError("image_url must be a valid https:// URL")
-        return cleaned
+        if parsed.username is not None or parsed.password is not None:
+            raise OfferValidationError("image_url must not contain embedded credentials")
+        return raw
 
     @model_validator(mode="after")
     def _validate_market_and_url(self, info: ValidationInfo) -> Self:
@@ -144,20 +184,25 @@ class ProductOffer(BaseModel):
             )
 
         context = info.context
-        has_context = isinstance(context, Mapping)
+        has_attribution_key = isinstance(context, Mapping) and "merchant_attribution" in context
         raw_attribution = (
             context.get("merchant_attribution") if isinstance(context, Mapping) else None
         )
         if raw_attribution is not None and not isinstance(raw_attribution, str):
             raise OfferValidationError("merchant_attribution context value must be a string")
 
-        # Require explicit attribution for fresh Python construction or when context is supplied,
-        # while preserving validated offers when nested in RankedOffer/CatalogSearchResult or JSON.
-        require_attribution = (
-            info.mode != "json" and not self._google_attribution_verified
-        ) or has_context
+        allow_cached_google = (
+            isinstance(context, Mapping)
+            and context.get("allow_verified_google_shopping_from_cache") is True
+            and not has_attribution_key
+        )
+        # Never bypass attribution on arbitrary JSON payloads; only allow verified in-memory
+        # offers (e.g. wrapped in RankedOffer) or explicit trusted cache deserialization.
+        require_attribution = has_attribution_key or (
+            not self._google_attribution_verified and not allow_cached_google
+        )
         self.url = _validate_regional_offer_url(
-            str(self.url),
+            self.url,
             country=self.country,
             store=self.store,
             merchant_attribution=raw_attribution,

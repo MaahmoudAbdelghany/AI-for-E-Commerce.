@@ -58,21 +58,21 @@ Feature 1.3 is complete when `domain/ports.py` exposes pure `CatalogProvider` an
 - [x] **T3.4 — Malformed Item Skipping & Honest Empty Result (`INV-05`)**: Feed Serper `200 OK` with invalid price string (`"N/A"`), missing URL, and empty `"shopping": []` → invalid entries are skipped cleanly without hallucinated defaults, and zero qualifying items returns `CatalogSearchResult(offers=[], source_mode=CatalogSourceMode.LIVE, cache_hit=False)` (`backend/tests/unit/test_catalog_serper.py::test_serper_skips_malformed_items_and_handles_empty_results`).
 - [x] **T3.5 — `CachedCatalogProvider` Resilience & Never-Cache-Failures (`INV-08`)**: (a) Inner provider raises `CatalogProviderError` → error propagates and cache remains empty; (b) `CacheStore.get()` raises `CacheStoreError` or holds corrupt non-JSON string → provider still executes and returns valid `CatalogSearchResult`; (c) `CacheStore.set()` raises `CacheStoreError` → valid `CatalogSearchResult` is still returned with `cache_hit=False` (`backend/tests/integration/test_cached_catalog.py::test_cached_catalog_error_resilience_and_no_error_caching`).
 - [x] **T3.6 — `RedisCacheStore` Wraps Errors & Redacts `REDIS_URL` Credentials (`INV-01`, `INV-08`)**: Simulate `RedisError` on `get`/`set` when configured with `redis://user:supersecret@localhost:6379/0` → raises `CacheStoreError` without exposing `"supersecret"` in exception text or logs (`backend/tests/unit/test_cache_stores.py::test_redis_cache_error_wrapping_and_secret_redaction`).
-- [x] **T3.7 — `InMemoryTTLCache` Boundary Conditions**: Verify `delete()` on an absent key is a safe no-op and `set(..., ttl_seconds=0)` does not retain stale data (`backend/tests/unit/test_cache_stores.py::test_in_memory_cache_edge_cases`).
-- [x] **T3.8 — Cache Factory Fallback on Unreachable `REDIS_URL` (`P1`, `INV-08`)**: Pass an unreachable `REDIS_URL` (`redis://:secretpass@127.0.0.1:6399/0`) to the cache factory → falls back to `InMemoryTTLCache` with sanitized warning (no `"secretpass"` leaked) (`backend/tests/unit/test_cache_stores.py::test_cache_factory_falls_back_when_redis_unreachable`).
-- [x] **T3.9 — `SeedCatalogProvider` Non-Matching Query & Arabic Variants**: Query a nonexistent product token (e.g., `"xyz-nonexistent-999"`) and Arabic hamza/teh-marbuta variations (e.g., `"ايفون 15"` / `"سماعه بلوتوث"`) → nonexistent query returns empty `offers=[]` (`source_mode=SEED`) and Arabic normalization matches expected seed items (`backend/tests/unit/test_catalog_seed.py::test_seed_provider_arabic_variants_and_empty_match`).
+- [x] **T3.7 — `InMemoryTTLCache` Boundary Conditions & LRU Eviction**: Verify `delete()` on an absent key is a safe no-op, `set(..., ttl_seconds=0)` does not retain stale data, non-positive `max_entries` is rejected, and exceeding `max_entries` prunes expired keys first and evicts the least-recently-used entry (`backend/tests/unit/test_cache_stores.py::test_in_memory_cache_edge_cases`).
+- [x] **T3.8 — Cache Factory Fallback on Unreachable / Malformed `REDIS_URL` (`P1`, `INV-08`)**: Pass a mocked unreachable `REDIS_URL` (`redis://:secretpass@127.0.0.1:6399/0`) and a malformed-port `REDIS_URL` to the cache factory → falls back cleanly to `InMemoryTTLCache` with sanitized warning (no `"secretpass"` leaked) (`backend/tests/unit/test_cache_stores.py::test_cache_factory_falls_back_when_redis_unreachable`).
+- [x] **T3.9 — `SeedCatalogProvider` Non-Matching Query, Arabic Variants & Error Handling**: Query a nonexistent product token (e.g., `"xyz-nonexistent-999"`), stop-word-only queries, Arabic hamza/teh-marbuta/numeral variations (e.g., `"ايفون 15"`, `"سماعه بلوتوث"`, `"مقلاة ٥"`), and missing/corrupt/mismatched-country seed files → nonexistent/stop-word queries return empty `offers=[]` (`source_mode=SEED`), Arabic normalization matches expected seed items, and invalid seed files raise `CatalogProviderError(provider="seed", retriable=False)` (`backend/tests/unit/test_catalog_seed.py::test_seed_provider_arabic_variants_and_empty_match`, `test_seed_provider_arabic_indic_numerals_and_file_errors`).
 - [x] **T3.10 — Explicit `catalog_mode="serper"` Without `SERPER_API_KEY` (`P6`)**: Invoke catalog factory with `catalog_mode="serper"` and `serper_api_key=None` (or empty string) → raises `CatalogProviderError(provider="serper", retriable=False, ...)` instead of silently returning `SeedCatalogProvider` (`backend/tests/unit/test_catalog_serper.py::test_catalog_factory_serper_mode_requires_api_key`).
 
 ### Tier 4: Regression Checks
 
-- [x] **T4.1 — Full Offline Backend Test Suite (`INV-07`)**: Run `uv run --directory backend pytest -v` (confirming all Feature 1.1, Feature 1.2, and Feature 1.3 unit and integration tests pass 100% offline in `< 30 s`, with any optional `@pytest.mark.live` check excluded from offline CI runs).
+- [x] **T4.1 — Full Offline Backend Test Suite (`INV-07`)**: Run `uv run --no-sync --directory backend pytest -v` (confirming all Feature 1.1, Feature 1.2, Feature 1.3, and Phase 1 E2E unit and integration tests pass 100% offline in `< 30 s`, with any optional `@pytest.mark.live` check excluded from offline CI runs).
 
 ### Tier 5: Build, Lint & Type Checks
 
-- [x] **T5.1 — Ruff Lint Check**: `uv run --directory backend ruff check .` passes with zero errors.
-- [x] **T5.2 — Ruff Format Check**: `uv run --directory backend ruff format --check .` passes with zero formatting diffs.
-- [x] **T5.3 — Strict Type Check**: `uv run --directory backend mypy src` passes with zero type errors across `domain/ports.py`, `adapters/cache/`, and `adapters/catalog/`.
-- [x] **T5.4 — Environment & Dependency Sync**: `uv sync --directory backend --all-extras --dev` resolves and syncs cleanly using Feature 1.1's `pyproject.toml` without adding or altering dependencies.
+- [x] **T5.1 — Ruff Lint Check**: `uv run --no-sync --directory backend ruff check .` passes with zero errors.
+- [x] **T5.2 — Ruff Format Check**: `uv run --no-sync --directory backend ruff format --check .` passes with zero formatting diffs.
+- [x] **T5.3 — Strict Type Check**: `uv run --no-sync --directory backend mypy src` passes with zero type errors across `domain/ports.py`, `adapters/cache/`, and `adapters/catalog/`.
+- [x] **T5.4 — Environment & Lock Verification**: `uv lock --directory backend --check` confirms lockfile consistency and `uv run --no-sync --directory backend ...` runs offline without adding or altering dependencies (`P7`).
 
 ### Tier 6: Manual / Visual Verification
 
@@ -103,12 +103,12 @@ uv run --directory backend mypy src
 
 | Check | Result (✅ / ❌ / ⏭ N/A) | Evidence (command output summary, counts) |
 |:---|:---|:---|
-| **T1.1–T1.10** (Unit checks) | ✅ | `uv run --no-sync --directory backend pytest tests/unit/test_cache_stores.py tests/unit/test_catalog_seed.py tests/unit/test_catalog_serper.py tests/integration/test_cached_catalog.py -v` → `23 passed in 1.13s` (covers all Tier 1 unit checks offline) |
-| **T2.1–T2.3** (Integration checks) | ✅ | Included in `23 passed in 1.13s` (`tests/integration/test_cached_catalog.py`: `test_cached_seed_catalog_miss_then_hit`, `test_cached_live_serper_with_fakeredis`, `test_factories_wire_fallback_cache_and_seed_provider`) |
-| **T3.1–T3.10** (Error & Edge checks) | ✅ | Included in `23 passed in 1.13s` across `test_cache_stores.py`, `test_catalog_seed.py`, `test_catalog_serper.py`, and `test_cached_catalog.py` |
-| **T4.1** (Full-suite regression) | ✅ | `uv run --no-sync --directory backend pytest -v` → `63 passed in 1.21s` (`22` Feature 1.1 + `18` Feature 1.2 + `23` Feature 1.3 tests 100% offline, verified after Feature 1.2 commit `9c4ddf6`) |
+| **T1.1–T1.10** (Unit checks) | ✅ | `uv run --no-sync --directory backend pytest tests/unit/test_cache_stores.py tests/unit/test_catalog_seed.py tests/unit/test_catalog_serper.py tests/integration/test_cached_catalog.py -v` → `24 passed in 0.97s` (covers all Tier 1 unit checks offline) |
+| **T2.1–T2.3** (Integration checks) | ✅ | Included in `24 passed in 0.97s` (`tests/integration/test_cached_catalog.py`: `test_cached_seed_catalog_miss_then_hit`, `test_cached_live_serper_with_fakeredis`, `test_factories_wire_fallback_cache_and_seed_provider`) |
+| **T3.1–T3.10** (Error & Edge checks) | ✅ | Included in `24 passed in 0.97s` across `test_cache_stores.py`, `test_catalog_seed.py`, `test_catalog_serper.py`, and `test_cached_catalog.py` |
+| **T4.1** (Full-suite regression) | ✅ | `uv run --no-sync --directory backend pytest -v` → `80 passed in 1.51s` (`22` Feature 1.1 + `18` Feature 1.2 + `24` Feature 1.3 + `16` Phase 1 E2E tests 100% offline) |
 | **T5.1** (Ruff lint) | ✅ | `uv run --no-sync --directory backend ruff check .` → `All checks passed!` |
-| **T5.2** (Ruff format) | ✅ | `uv run --no-sync --directory backend ruff format --check .` → `29 files already formatted` |
+| **T5.2** (Ruff format) | ✅ | `uv run --no-sync --directory backend ruff format --check .` → `30 files already formatted` |
 | **T5.3** (Mypy strict) | ✅ | `uv run --no-sync --directory backend mypy src` → `Success: no issues found in 20 source files` |
-| **T5.4** (Env sync / lock) | ✅ | `uv lock --directory backend --check` → `Resolved 30 packages in 1ms` (`backend/pyproject.toml` and `backend/uv.lock` untouched per `P7`) |
+| **T5.4** (Env sync / lock) | ✅ | `uv lock --directory backend --check` → `Resolved 30 packages in 1ms` (`backend/pyproject.toml` and `backend/uv.lock` untouched per `P7`; offline commands run via `uv run --no-sync`) |
 | **Tier 6 / Tier 7 / Extra** | ⏭ N/A | Technical justifications in §3 (no UI/routes in Feature 1.3; `tests/evals` starts in Feature 4.1) |

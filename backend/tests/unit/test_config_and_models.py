@@ -14,6 +14,7 @@ from commerce_ai.config import (
     AppSettings,
     MarketConfig,
     ScoringConfig,
+    redact_url_password,
     validate_regional_offer_url,
 )
 from commerce_ai.domain import (
@@ -319,6 +320,13 @@ def test_search_intent_normalized_cache_key() -> None:
     )
     assert zero_rating_intent.normalized_cache_key() == "ae:both:mouse:none:0.00"
 
+    punct_key_a = SearchIntent(query="!!!", country=CountryCode.EG).normalized_cache_key()
+    punct_key_b = SearchIntent(query="???", country=CountryCode.EG).normalized_cache_key()
+    assert punct_key_a.startswith("eg:both:q-")
+    assert len(punct_key_a.split(":")[2]) == 10
+    assert punct_key_a.endswith(":none:none")
+    assert punct_key_a != punct_key_b
+
 
 def test_ranking_and_catalog_result_models() -> None:
     """T1.10 — RankedOffer, RankingResult, and CatalogSearchResult validate and round-trip JSON."""
@@ -385,6 +393,7 @@ def test_scoring_config_rejects_invalid_bounds() -> None:
         {"price_floor_ratio": 1.0},
         {"price_ceiling_ratio": 1.0},
         {"top_k": 0},
+        {"top_k": 4},
         {"min_candidates_for_outlier_guard": 0},
     ]
     for kwargs in invalid_kwargs:
@@ -440,6 +449,35 @@ def test_app_settings_secret_masking_and_invalid_values(
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None, serper_timeout_seconds=-1.0)
 
+    bad_port_redacted = redact_url_password("redis://:sec-ret@127.0.0.1:badport/0")
+    assert bad_port_redacted is not None
+    assert "sec-ret" not in bad_port_redacted
+    assert "***" in bad_port_redacted
+
+    complex_pw_redacted = redact_url_password("redis://user:p@ss:w%40rd@127.0.0.1:6379/0")
+    assert complex_pw_redacted is not None
+    assert "p@ss" not in complex_pw_redacted
+    assert "w%40rd" not in complex_pw_redacted
+
+    query_redacted = redact_url_password(
+        "redis://127.0.0.1:6379/0?password=qsecret&pass=psecret&token=tsecret&db=0"
+    )
+    assert query_redacted is not None
+    assert "qsecret" not in query_redacted
+    assert "psecret" not in query_redacted
+    assert "tsecret" not in query_redacted
+    assert "password=***" in query_redacted
+    assert "pass=***" in query_redacted
+    assert "token=***" in query_redacted
+    assert "db=0" in query_redacted
+
+    bad_port_query_redacted = redact_url_password(
+        "redis://:p@ss:word@127.0.0.1:badport/0?token=toksecret"
+    )
+    assert bad_port_query_redacted is not None
+    assert "p@ss:word" not in bad_port_query_redacted
+    assert "toksecret" not in bad_port_query_redacted
+
 
 def test_product_offer_rejects_invalid_price_and_rating() -> None:
     """T3.4 — ProductOffer rejects non-positive/tiny/non-finite prices and invalid ratings."""
@@ -494,17 +532,45 @@ def test_product_offer_rejects_cross_country_and_cross_store_urls() -> None:
 
 
 def test_product_offer_rejects_insecure_and_third_party_urls() -> None:
-    """T3.7 — ProductOffer rejects non-HTTPS URLs, bad image URLs, and unknown sellers."""
+    """T3.7 — ProductOffer rejects non-HTTPS, malformed/traversal, control-char, & unknown URLs."""
     for bad_url in (
         "http://www.amazon.eg/dp/123",
         "ftp://www.amazon.eg/dp/123",
         "https://www.jumia.com.eg/product/123",
         "https://www.ebay.com/itm/123",
+        "https://www.amazon.eg/dp/123\n",
+        "https://www.amazon.eg/dp/123\t",
+        " https://www.amazon.eg/dp/123 ",
+        "https://www.amazon.eg/dp/123\x00",
+        "https://www.amazon.eg\\dp\\123",
+        "https://www.amazon.eg/dp/123;jsessionid=1",
+        "https://www.amazon.eg/dp/../other",
+        "https://[::1/bad",
     ):
         with pytest.raises(ValidationError):
             ProductOffer.model_validate(_make_offer_payload(url=bad_url))
 
-    for bad_img in ("http://cdn.example.com/a.jpg", "not-a-url", ""):
+    for bad_noon_url in (
+        "https://www.noon.com/egyptian-evil/item",
+        "https://www.noon.com/egypt-/item",
+        "https://www.noon.com/egypt-en/../saudi-en/item",
+        "https://www.noon.com/egypt-en/%2e%2e/saudi-en/item",
+        "https://www.noon.com/egypt-en%2f../saudi-en/item",
+        "https://www.noon.com/egypt-en/%5c../item",
+    ):
+        with pytest.raises(ValidationError):
+            ProductOffer.model_validate(_make_offer_payload(store=StoreId.NOON, url=bad_noon_url))
+
+    for bad_img in (
+        "http://cdn.example.com/a.jpg",
+        "not-a-url",
+        "",
+        "https://user:pass@cdn.example.com/a.jpg",
+        "https://user@cdn.example.com/a.jpg",
+        "https://cdn.example.com/a.jpg\n",
+        " https://cdn.example.com/a.jpg",
+        "https://[::1/bad",
+    ):
         with pytest.raises(ValidationError):
             ProductOffer.model_validate(_make_offer_payload(image_url=bad_img))
 
@@ -548,22 +614,50 @@ def test_google_shopping_url_attribution_validation_and_cache_roundtrip() -> Non
             context={"merchant_attribution": "Amazon.eg"},
         )
 
-    with pytest.raises(ValidationError):
-        ProductOffer.model_validate(
-            _make_offer_payload(url="https://www.google.com/search?q=iphone"),
-            context={"merchant_attribution": "Amazon.eg"},
-        )
+    for bad_google_url in (
+        "https://www.google.com/search?q=iphone",
+        "https://www.google.com/shopping-evil/product/123",
+        "https://www.google.com/shopping/../search?q=iphone",
+    ):
+        with pytest.raises(ValidationError):
+            ProductOffer.model_validate(
+                _make_offer_payload(url=bad_google_url),
+                context={"merchant_attribution": "Amazon.eg"},
+            )
 
     attributed_offer = ProductOffer.model_validate(
         _make_offer_payload(url=google_url),
         context={"merchant_attribution": "Amazon.eg"},
     )
+    offer_json = attributed_offer.model_dump_json()
+    with pytest.raises(ValidationError):
+        ProductOffer.model_validate_json(offer_json)
+
     cached_payload = CatalogSearchResult(
         offers=[attributed_offer],
         source_mode=CatalogSourceMode.LIVE,
         cache_hit=False,
     ).model_dump_json()
-    restored = CatalogSearchResult.model_validate_json(cached_payload)
+    with pytest.raises(ValidationError):
+        CatalogSearchResult.model_validate_json(cached_payload)
+    with pytest.raises(ValidationError):
+        CatalogSearchResult.model_validate_json(
+            cached_payload,
+            context={"allow_verified_google_shopping_from_cache": "yes"},
+        )
+    with pytest.raises(ValidationError):
+        CatalogSearchResult.model_validate_json(
+            cached_payload,
+            context={
+                "allow_verified_google_shopping_from_cache": True,
+                "merchant_attribution": "ThirdParty",
+            },
+        )
+
+    restored = CatalogSearchResult.model_validate_json(
+        cached_payload,
+        context={"allow_verified_google_shopping_from_cache": True},
+    )
     assert restored.offers[0].url == google_url
 
     ranked_restored = RankedOffer(
@@ -578,6 +672,11 @@ def test_google_shopping_url_attribution_validation_and_cache_roundtrip() -> Non
     tampered_search_json = cached_payload.replace("/shopping/product/123", "/search?q=iphone")
     with pytest.raises(ValidationError):
         CatalogSearchResult.model_validate_json(tampered_search_json)
+    with pytest.raises(ValidationError):
+        CatalogSearchResult.model_validate_json(
+            tampered_search_json,
+            context={"allow_verified_google_shopping_from_cache": True},
+        )
 
 
 def test_search_intent_validation_edge_cases() -> None:

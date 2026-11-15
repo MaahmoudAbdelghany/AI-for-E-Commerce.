@@ -9,11 +9,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import SecretStr, ValidationError
+from pydantic import HttpUrl, SecretStr, TypeAdapter, ValidationError
 
 from commerce_ai.config.markets import (
     MARKET_REGISTRY,
     MarketConfig,
+    has_control_or_whitespace,
     validate_regional_offer_url,
 )
 from commerce_ai.domain.errors import CatalogProviderError, OfferValidationError
@@ -32,6 +33,7 @@ SERPER_SHOPPING_URL = "https://google.serper.dev/shopping"
 _CENTS = Decimal("0.01")
 _PRICE_NUMBER_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 _ARABIC_DIGITS_TRANSLATION = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹٬٫", "01234567890123456789,.")
+_IMAGE_HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
 
 _FOREIGN_CURRENCY_SYMBOLS = ("$", "€", "£", "¥", "₹", "₺")
 _FOREIGN_CURRENCY_CODES_BY_EXPECTED: dict[CurrencyCode, tuple[str, ...]] = {
@@ -118,15 +120,21 @@ def _parse_review_count(raw_item: dict[str, Any]) -> int:
 
 def _parse_https_image_url(raw_item: dict[str, Any]) -> str | None:
     raw_image = raw_item.get("imageUrl") or raw_item.get("image_url") or raw_item.get("thumbnail")
-    if not isinstance(raw_image, str):
+    if not isinstance(raw_image, str) or not raw_image:
         return None
-    cleaned = raw_image.strip()
-    if not cleaned:
+    if has_control_or_whitespace(raw_image) or "\\" in raw_image:
         return None
-    parsed = urlsplit(cleaned)
+    try:
+        parsed = urlsplit(raw_image)
+        _ = parsed.port
+        _IMAGE_HTTP_URL_ADAPTER.validate_python(raw_image)
+    except (ValueError, ValidationError):
+        return None
     if parsed.scheme.lower() != "https" or not parsed.hostname:
         return None
-    return cleaned
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    return raw_image
 
 
 def _resolve_candidate_store(
@@ -135,8 +143,16 @@ def _resolve_candidate_store(
     market: MarketConfig,
     merchant_attribution: str | None,
 ) -> StoreId | None:
-    parsed = urlsplit(link.strip())
+    if not link or has_control_or_whitespace(link) or "\\" in link:
+        return None
+    try:
+        parsed = urlsplit(link)
+        _ = parsed.port
+    except ValueError:
+        return None
     if parsed.scheme.lower() != "https":
+        return None
+    if parsed.username is not None or parsed.password is not None:
         return None
     host = (parsed.hostname or "").lower().rstrip(".")
     if not host:
@@ -245,9 +261,7 @@ class SerperShoppingProvider:
         ):
             base_offer_id = f"serper-{candidate_store.value}-{str(raw_product_id).strip()}"
         else:
-            digest = hashlib.sha256(
-                f"{candidate_store.value}:{raw_link.strip()}".encode()
-            ).hexdigest()[:12]
+            digest = hashlib.sha256(f"{candidate_store.value}:{raw_link}".encode()).hexdigest()[:12]
             base_offer_id = f"serper-{candidate_store.value}-{digest}"
 
         offer_id = base_offer_id
@@ -258,7 +272,7 @@ class SerperShoppingProvider:
 
         try:
             validated_url = validate_regional_offer_url(
-                raw_link.strip(),
+                raw_link,
                 country=country,
                 store=candidate_store,
                 merchant_attribution=merchant_attribution,
@@ -311,6 +325,10 @@ class SerperShoppingProvider:
             reason = self._redact_reason(f"Serper Shopping transport error: {exc}")
             logger.warning("Serper transport failure: %s", reason)
             raise CatalogProviderError(provider="serper", retriable=True, reason=reason) from exc
+        except httpx.HTTPError as exc:
+            reason = self._redact_reason(f"Serper Shopping HTTP error: {exc}")
+            logger.warning("Serper HTTP failure: %s", reason)
+            raise CatalogProviderError(provider="serper", retriable=False, reason=reason) from exc
 
         if response.status_code < 200 or response.status_code >= 300:
             retriable = response.status_code == 429 or 500 <= response.status_code < 600

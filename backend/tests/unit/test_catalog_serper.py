@@ -30,8 +30,11 @@ from commerce_ai.domain.models import (
 from commerce_ai.domain.ports import CatalogProvider
 
 
-async def test_serper_sends_single_configured_shopping_request() -> None:
+async def test_serper_sends_single_configured_shopping_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """T1.7 — SerperShoppingProvider issues strictly 1 POST /shopping call with P5 settings."""
+    monkeypatch.delenv("SERPER_TIMEOUT_SECONDS", raising=False)
     cases = [
         (CountryCode.EG, "ar", StoreFilter.BOTH, "سماعة بلوتوث", "eg", "سماعة بلوتوث"),
         (CountryCode.SA, "en", StoreFilter.NOON, "Anker earbuds", "sa", "Anker earbuds noon"),
@@ -146,6 +149,22 @@ async def test_serper_parses_official_and_attributed_google_shopping_offers(
                 "link": "https://www.google.com.eg/shopping/product/654321",
                 "price": "3650.256",
                 "rating": None,
+                "productId": "dup-1",
+            },
+            {
+                "title": "Anker Soundcore Duplicate ID",
+                "source": "Amazon.eg",
+                "link": "https://www.amazon.eg/dp/B0DUPID001",
+                "price": 1999,
+                "rating": 5.5,
+                "productId": "dup-1",
+            },
+            {
+                "title": "Anker Soundcore Decimal Price",
+                "source": "Amazon.eg",
+                "link": "https://www.amazon.eg/dp/B0DEC00001",
+                "price": 199.5,
+                "rating": -1.0,
             },
         ]
     }
@@ -159,8 +178,8 @@ async def test_serper_parses_official_and_attributed_google_shopping_offers(
 
     assert result.source_mode == CatalogSourceMode.LIVE
     assert result.cache_hit is False
-    assert len(result.offers) == 4
-    assert len(validation_calls) == 4
+    assert len(result.offers) == 6
+    assert len(validation_calls) == 6
 
     assert result.offers[0].store == StoreId.AMAZON
     assert result.offers[0].currency == CurrencyCode.EGP
@@ -177,9 +196,49 @@ async def test_serper_parses_official_and_attributed_google_shopping_offers(
     assert result.offers[2].price == Decimal("1199.00")
 
     assert result.offers[3].store == StoreId.NOON
+    assert result.offers[3].offer_id == "serper-noon-dup-1"
     assert result.offers[3].price == Decimal("3650.26")
     assert result.offers[3].rating is None
     assert result.offers[3].review_count == 0
+
+    assert result.offers[4].offer_id == "serper-amazon-dup-1"
+    assert result.offers[4].price == Decimal("1999.00")
+    assert result.offers[4].rating is None
+
+    assert result.offers[5].price == Decimal("199.50")
+    assert result.offers[5].rating is None
+
+    # Duplicate same-store productId gets -2 suffix and Arabic SAR text parses cleanly.
+    sa_payload = {
+        "shopping": [
+            {
+                "title": "Anker SA First",
+                "source": "Amazon.sa",
+                "link": "https://www.amazon.sa/dp/B0SAR1",
+                "price": "199 ر.س",
+                "productId": "same-1",
+            },
+            {
+                "title": "Anker SA Second",
+                "source": "Amazon.sa",
+                "link": "https://www.amazon.sa/dp/B0SAR2",
+                "price": "SAR 250",
+                "productId": "same-1",
+            },
+        ]
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _req: httpx.Response(200, json=sa_payload))
+    ) as client:
+        sa_provider = SerperShoppingProvider(api_key=SecretStr("key-123"), client=client)
+        sa_res = await sa_provider.search_offers(
+            SearchIntent(query="Anker", country=CountryCode.SA)
+        )
+    assert [o.offer_id for o in sa_res.offers] == [
+        "serper-amazon-same-1",
+        "serper-amazon-same-1-2",
+    ]
+    assert sa_res.offers[0].price == Decimal("199.00")
 
 
 async def test_serper_filters_out_cross_country_and_third_party_offers() -> None:
@@ -243,10 +302,22 @@ async def test_serper_filters_out_cross_country_and_third_party_offers() -> None
                 "price": "EGP 2,100.00",
             },
             {
-                "title": "Foreign USD Price on Amazon Egypt Google Link",
+                "title": "Foreign USD Symbol Price on Amazon Egypt Google Link",
                 "source": "Amazon.eg",
                 "link": "https://www.google.com/shopping/product/44444",
                 "price": "$199.99",
+            },
+            {
+                "title": "Foreign USD Code Price on Amazon Egypt Google Link",
+                "source": "Amazon.eg",
+                "link": "https://www.google.com/shopping/product/55555",
+                "price": "USD 199.99",
+            },
+            {
+                "title": "Ambiguous Price Range on Amazon Egypt",
+                "source": "Amazon.eg",
+                "link": "https://www.amazon.eg/dp/B0RANGE",
+                "price": "EGP 100 - 200",
             },
         ]
     }
@@ -260,12 +331,16 @@ async def test_serper_filters_out_cross_country_and_third_party_offers() -> None
         noon_only = await provider.search_offers(
             SearchIntent(query="earbuds", country=CountryCode.EG, store=StoreFilter.NOON)
         )
+        amazon_only = await provider.search_offers(
+            SearchIntent(query="earbuds", country=CountryCode.EG, store=StoreFilter.AMAZON)
+        )
 
     assert [o.title for o in both_res.offers] == [
         "Valid Amazon Egypt Offer",
         "Valid Noon Egypt via Google Shopping",
     ]
     assert [o.title for o in noon_only.offers] == ["Valid Noon Egypt via Google Shopping"]
+    assert [o.title for o in amazon_only.offers] == ["Valid Amazon Egypt Offer"]
 
 
 async def test_serper_timeout_raises_retriable_error_without_seed_fallback() -> None:
@@ -292,6 +367,7 @@ async def test_serper_http_and_schema_errors_raise_typed_error() -> None:
     """T3.2 — Non-2xx statuses and malformed JSON/schemas raise accurate CatalogProviderError."""
     error_cases: list[tuple[httpx.Response, bool]] = [
         (httpx.Response(401, json={"message": "Unauthorized"}), False),
+        (httpx.Response(403, json={"message": "Forbidden"}), False),
         (httpx.Response(400, json={"message": "Bad Request"}), False),
         (httpx.Response(404, json={"message": "Not Found"}), False),
         (httpx.Response(429, json={"message": "Rate limit"}), True),
@@ -331,8 +407,29 @@ async def test_serper_never_logs_or_leaks_api_key(
             with pytest.raises(CatalogProviderError) as exc_info:
                 await provider.search_offers(SearchIntent(query="laptop", country=CountryCode.AE))
 
+    assert exc_info.value.retriable is True
     assert secret not in exc_info.value.reason
     assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+
+    def decoding_error_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.DecodingError(
+            f"failed to decode response body (X-API-KEY={secret})",
+            request=request,
+        )
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(decoding_error_handler)
+        ) as client:
+            provider = SerperShoppingProvider(api_key=SecretStr(secret), client=client)
+            with pytest.raises(CatalogProviderError) as dec_exc:
+                await provider.search_offers(SearchIntent(query="laptop", country=CountryCode.AE))
+
+    assert dec_exc.value.provider == "serper"
+    assert dec_exc.value.retriable is False
+    assert secret not in dec_exc.value.reason
     assert secret not in caplog.text
 
 
@@ -359,11 +456,24 @@ async def test_serper_skips_malformed_items_and_handles_empty_results() -> None:
                 "price": "AED 199.00",
             },
             {
+                "title": "Malformed IPv6 URL Item",
+                "source": "Amazon.ae",
+                "link": "https://[::1/bad",
+                "price": "AED 199.00",
+            },
+            {
                 "title": "Valid UAE Offer with Insecure Thumbnail Stripped",
                 "source": "Amazon.ae",
                 "link": "https://www.amazon.ae/dp/B0GOOD1",
                 "price": "AED 499.00",
                 "imageUrl": "http://insecure.example.com/img.jpg",
+            },
+            {
+                "title": "Valid UAE Offer with Malformed IPv6 Thumbnail Stripped",
+                "source": "Amazon.ae",
+                "link": "https://www.amazon.ae/dp/B0GOOD2",
+                "price": "AED 599.00",
+                "imageUrl": "https://[::1/bad",
             },
         ]
     }
@@ -378,9 +488,11 @@ async def test_serper_skips_malformed_items_and_handles_empty_results() -> None:
 
     assert mixed_res.source_mode == CatalogSourceMode.LIVE
     assert mixed_res.cache_hit is False
-    assert len(mixed_res.offers) == 1
+    assert len(mixed_res.offers) == 2
     assert mixed_res.offers[0].title == "Valid UAE Offer with Insecure Thumbnail Stripped"
     assert mixed_res.offers[0].image_url is None
+    assert mixed_res.offers[1].title == "Valid UAE Offer with Malformed IPv6 Thumbnail Stripped"
+    assert mixed_res.offers[1].image_url is None
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _req: httpx.Response(200, json={"shopping": []}))

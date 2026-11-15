@@ -2,12 +2,19 @@
 
 import ast
 import inspect
+import json
 from decimal import Decimal
 from pathlib import Path
 
-from commerce_ai.adapters.catalog.seed_provider import SeedCatalogProvider
+import pytest
+
+from commerce_ai.adapters.catalog.seed_provider import (
+    SeedCatalogProvider,
+    normalize_bilingual_text,
+)
 from commerce_ai.config.markets import MARKET_REGISTRY, validate_regional_offer_url
 from commerce_ai.domain import ports
+from commerce_ai.domain.errors import CatalogProviderError
 from commerce_ai.domain.models import (
     CatalogSourceMode,
     CountryCode,
@@ -189,3 +196,67 @@ async def test_seed_provider_arabic_variants_and_empty_match() -> None:
     )
     assert len(earbuds_res.offers) >= 5
     assert all(o.country == CountryCode.SA for o in earbuds_res.offers)
+
+    for country in CountryCode:
+        en_appliances = await provider.search_offers(
+            SearchIntent(query="air fryer", country=country)
+        )
+        ar_appliances = await provider.search_offers(
+            SearchIntent(query="قلاية هوائية", country=country)
+        )
+        assert len(en_appliances.offers) == 2
+        assert {o.offer_id for o in en_appliances.offers} == {
+            o.offer_id for o in ar_appliances.offers
+        }
+
+    for stop_query in ("the and for", "من في على"):
+        stop_res = await provider.search_offers(
+            SearchIntent(query=stop_query, country=CountryCode.EG)
+        )
+        assert stop_res.offers == []
+
+    assert "١٥" in normalize_bilingual_text("آيفون ١٥!").split()
+
+
+async def test_seed_provider_arabic_indic_numerals_and_file_errors(tmp_path: Path) -> None:
+    """SeedCatalogProvider handles Arabic-Indic numerals in fixtures and rejects bad files."""
+    seeds_dir = tmp_path / "seeds"
+    seeds_dir.mkdir()
+    defaults_dir = BACKEND_DIR / "src" / "commerce_ai" / "adapters" / "catalog" / "seeds"
+
+    # Missing country file raises non-retriable CatalogProviderError.
+    with pytest.raises(CatalogProviderError) as missing_exc:
+        SeedCatalogProvider(seeds_dir=seeds_dir)
+    assert missing_exc.value.provider == "seed"
+    assert missing_exc.value.retriable is False
+
+    # Copy SA & AE cleanly; write corrupt EG JSON.
+    for code in ("sa", "ae"):
+        (seeds_dir / f"{code}.json").write_text(
+            (defaults_dir / f"{code}.json").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    (seeds_dir / "eg.json").write_text("{corrupt-json", encoding="utf-8")
+    with pytest.raises(CatalogProviderError) as corrupt_exc:
+        SeedCatalogProvider(seeds_dir=seeds_dir)
+    assert corrupt_exc.value.provider == "seed"
+    assert corrupt_exc.value.retriable is False
+
+    # Mismatched declared country inside eg.json also raises CatalogProviderError.
+    sa_payload = json.loads((defaults_dir / "sa.json").read_text(encoding="utf-8"))
+    (seeds_dir / "eg.json").write_text(json.dumps(sa_payload), encoding="utf-8")
+    with pytest.raises(CatalogProviderError) as mismatch_exc:
+        SeedCatalogProvider(seeds_dir=seeds_dir)
+    assert mismatch_exc.value.provider == "seed"
+    assert mismatch_exc.value.retriable is False
+
+    # Custom Arabic-Indic numeral entry matches Arabic-Indic search query cleanly.
+    eg_payload = json.loads((defaults_dir / "eg.json").read_text(encoding="utf-8"))
+    eg_payload["items"][0]["offer"]["title"] = "مقلاة هوائية ذكية سعة ٥ لتر"
+    eg_payload["items"][0]["keywords"] = ["مقلاة", "هوائية", "٥"]
+    (seeds_dir / "eg.json").write_text(json.dumps(eg_payload, ensure_ascii=False), encoding="utf-8")
+    custom_provider = SeedCatalogProvider(seeds_dir=seeds_dir)
+    arabic_num_res = await custom_provider.search_offers(
+        SearchIntent(query="مقلاة ٥", country=CountryCode.EG)
+    )
+    assert any("٥" in offer.title for offer in arabic_num_res.offers)

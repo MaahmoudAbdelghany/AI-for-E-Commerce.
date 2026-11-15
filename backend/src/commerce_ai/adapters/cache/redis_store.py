@@ -3,7 +3,7 @@
 import inspect
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import redis.asyncio as aioredis
 from pydantic import SecretStr
@@ -13,7 +13,8 @@ from redis.exceptions import RedisError
 from commerce_ai.config.settings import redact_url_password
 from commerce_ai.domain.errors import CacheStoreError
 
-_URL_CREDENTIALS_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:@/\s]*):([^:@/\s]+)@")
+_URL_CREDENTIALS_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:/?#\s]*):([^\s/?#]+)@")
+_QUERY_SECRET_RE = re.compile(r"([?&](?:password|pass|token)=)([^&#\s]+)", re.IGNORECASE)
 _PASSWORD_KWARG_RE = re.compile(r"(password\s*=\s*['\"]?)([^'\",\s\)]+)(['\"]?)", re.IGNORECASE)
 
 
@@ -21,21 +22,37 @@ def extract_secret_password(redis_url: str | None) -> SecretStr | None:
     """Extract an optional URL password wrapped in SecretStr without exposing raw text."""
     if not redis_url:
         return None
+    raw_password: str | None = None
     try:
-        password = urlsplit(redis_url).password
+        parsed = urlsplit(redis_url)
+        raw_password = parsed.password
+        _ = parsed.username
+        _ = parsed.hostname
+        _ = parsed.port
+        _ = parsed.query
     except ValueError:
+        if raw_password is None:
+            match = _URL_CREDENTIALS_RE.search(redis_url)
+            if match is not None:
+                raw_password = match.group(2)
+    if not raw_password:
         return None
-    return SecretStr(password) if password else None
+    decoded = unquote(raw_password)
+    return SecretStr(decoded) if decoded else None
 
 
 def sanitize_redis_text(text: str, secret_password: SecretStr | None = None) -> str:
-    """Strip any URL credentials or password arguments from Redis diagnostics."""
+    """Strip any URL credentials, query secrets, or password arguments from Redis diagnostics."""
     sanitized = _URL_CREDENTIALS_RE.sub(r"\1:***@", text)
+    sanitized = _QUERY_SECRET_RE.sub(r"\1***", sanitized)
     sanitized = _PASSWORD_KWARG_RE.sub(r"\1***\3", sanitized)
     if secret_password is not None:
         raw_secret = secret_password.get_secret_value()
         if raw_secret:
             sanitized = sanitized.replace(raw_secret, "***")
+            encoded_secret = quote(raw_secret, safe="")
+            if encoded_secret != raw_secret:
+                sanitized = sanitized.replace(encoded_secret, "***")
     return sanitized
 
 

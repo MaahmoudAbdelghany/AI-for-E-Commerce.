@@ -36,7 +36,10 @@ class CachedCatalogProvider:
 
         if cached_raw is not None:
             try:
-                cached_result = CatalogSearchResult.model_validate_json(cached_raw)
+                cached_result = CatalogSearchResult.model_validate_json(
+                    cached_raw,
+                    context={"allow_verified_google_shopping_from_cache": True},
+                )
                 return cached_result.model_copy(update={"cache_hit": True})
             except (ValidationError, ValueError) as exc:
                 logger.warning(

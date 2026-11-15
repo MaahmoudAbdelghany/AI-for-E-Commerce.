@@ -18,7 +18,7 @@ class ScoringConfig(BaseModel):
     price_floor_ratio: float = Field(default=0.15, gt=0.0, lt=1.0, allow_inf_nan=False)
     price_ceiling_ratio: float = Field(default=3.0, gt=1.0, allow_inf_nan=False)
     min_candidates_for_outlier_guard: int = Field(default=3, ge=1)
-    top_k: int = Field(default=3, ge=1)
+    top_k: int = Field(default=3, ge=1, le=3)
 
     @model_validator(mode="after")
     def _validate_weights_and_ratios(self) -> Self:

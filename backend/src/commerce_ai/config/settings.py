@@ -11,7 +11,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from commerce_ai.config.scoring import ScoringConfig
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#")
-_FALLBACK_URL_SECRET_RE = re.compile(r":([^:@/\s]+)@")
+_FALLBACK_URL_SECRET_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:/?#\s]*):([^\s/?#]+)@")
+_QUERY_SECRET_RE = re.compile(r"([?&](?:password|pass|token)=)([^&#\s]+)", re.IGNORECASE)
+
+
+def _mask_query_secrets(text: str) -> str:
+    return _QUERY_SECRET_RE.sub(r"\1***", text)
+
+
+def _redact_fallback_url(url: str) -> str:
+    return _mask_query_secrets(_FALLBACK_URL_SECRET_RE.sub(r"\1:***@", url))
 
 
 def _strip_inline_comment(raw: str) -> str:
@@ -22,25 +31,37 @@ def _strip_inline_comment(raw: str) -> str:
 
 
 def redact_url_password(url: str | None) -> str | None:
-    """Mask any password component in a connection URL before logging or formatting."""
+    """Mask any password component or sensitive query parameter in a connection URL."""
     if url is None:
         return None
     try:
         parsed = urlsplit(url)
+        raw_password = parsed.password
+        raw_username = parsed.username
+        raw_hostname = parsed.hostname
+        raw_port = parsed.port
+        raw_scheme = parsed.scheme
+        raw_netloc = parsed.netloc
+        raw_path = parsed.path
+        raw_query = parsed.query
+        raw_fragment = parsed.fragment
     except ValueError:
-        return _FALLBACK_URL_SECRET_RE.sub(":***@", url)
+        return _redact_fallback_url(url)
 
-    if parsed.password is None:
-        return url
+    masked_query = _mask_query_secrets(f"?{raw_query}")[1:] if raw_query else raw_query
+    if raw_password is None:
+        if masked_query == raw_query:
+            return url
+        return urlunsplit((raw_scheme, raw_netloc, raw_path, masked_query, raw_fragment))
 
-    if parsed.hostname is None:
-        return _FALLBACK_URL_SECRET_RE.sub(":***@", url)
+    if raw_hostname is None:
+        return _redact_fallback_url(url)
 
-    user_part = parsed.username or ""
-    host_part = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-    port_part = f":{parsed.port}" if parsed.port is not None else ""
+    user_part = raw_username or ""
+    host_part = f"[{raw_hostname}]" if ":" in raw_hostname else raw_hostname
+    port_part = f":{raw_port}" if raw_port is not None else ""
     masked_netloc = f"{user_part}:***@{host_part}{port_part}"
-    return urlunsplit((parsed.scheme, masked_netloc, parsed.path, parsed.query, parsed.fragment))
+    return urlunsplit((raw_scheme, masked_netloc, raw_path, masked_query, raw_fragment))
 
 
 class AppSettings(BaseSettings):

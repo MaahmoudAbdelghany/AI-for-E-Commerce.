@@ -6,6 +6,7 @@ from typing import Literal
 import fakeredis.aioredis
 import pytest
 
+from commerce_ai.adapters.cache import redis_store as redis_store_module
 from commerce_ai.adapters.cache.factory import create_cache_store
 from commerce_ai.adapters.cache.memory import InMemoryTTLCache
 from commerce_ai.adapters.cache.redis_store import RedisCacheStore
@@ -13,6 +14,7 @@ from commerce_ai.adapters.catalog.cached_provider import CachedCatalogProvider
 from commerce_ai.adapters.catalog.factory import create_catalog_provider
 from commerce_ai.adapters.catalog.seed_provider import SeedCatalogProvider
 from commerce_ai.config.markets import MARKET_REGISTRY
+from commerce_ai.config.scoring import ScoringConfig
 from commerce_ai.config.settings import AppSettings
 from commerce_ai.domain.models import (
     CatalogSearchResult,
@@ -232,26 +234,85 @@ async def test_phase1_e2e_additional_categories_and_intent_filters(
             f"{prefix}-noon-anker-l4nc",
         ]
 
-        # 4. Explicit accessory opt-in keeps the case eligible rather than filtering it out.
-        accessory_intent = SearchIntent(
-            query="Anker earbuds case",
+        # 4. Positive bilingual accessory searches (include_accessories=False) retain case trap.
+        for acc_lang, acc_query in (("en", "Anker earbuds case"), ("ar", "جراب أنكر")):
+            pos_acc_intent = SearchIntent(
+                query=acc_query,
+                country=country,
+                include_accessories=False,
+                language=acc_lang,  # type: ignore[arg-type]
+            )
+            pos_acc_catalog = await provider.search_offers(pos_acc_intent)
+            pos_acc_ranking = rank_top_offers(pos_acc_catalog.offers, pos_acc_intent)
+            assert pos_acc_ranking.filtered_accessories_count == 0
+            assert f"{prefix}-noon-anker-case-trap" in [
+                item.offer.offer_id for item in pos_acc_ranking.ranked_offers
+            ]
+
+        # 5. Explicit include_accessories=True bypasses Stage 1 without accessory keyword in query.
+        accessory_opt_in_intent = SearchIntent(
+            query="Anker earbuds",
             country=country,
             include_accessories=True,
             language="en",
         )
-        acc_catalog = await provider.search_offers(accessory_intent)
-        acc_ranking = rank_top_offers(acc_catalog.offers, accessory_intent)
+        acc_catalog = await provider.search_offers(accessory_opt_in_intent)
+        acc_ranking = rank_top_offers(acc_catalog.offers, accessory_opt_in_intent)
         assert acc_ranking.filtered_accessories_count == 0
-        assert acc_ranking.ranked_offers[0].offer.offer_id == f"{prefix}-noon-anker-case-trap"
+        assert acc_ranking.filtered_outliers_count == 2
+        no_outlier_acc_ranking = rank_top_offers(
+            acc_catalog.offers,
+            accessory_opt_in_intent,
+            config=ScoringConfig(min_candidates_for_outlier_guard=99),
+        )
+        assert no_outlier_acc_ranking.filtered_accessories_count == 0
+        assert any(
+            item.offer.offer_id == f"{prefix}-noon-anker-case-trap"
+            for item in no_outlier_acc_ranking.ranked_offers
+        )
 
-        # Expect 5 upstream misses across the unique normalized intents tested above.
-        assert spy.call_count == 5
+        # 6. Home appliances (bilingual air fryer E2E).
+        appliance_queries: tuple[tuple[Literal["ar", "en"], str], ...] = (
+            ("en", "air fryer"),
+            ("ar", "قلاية هوائية"),
+        )
+        for app_lang, app_query in appliance_queries:
+            app_intent = SearchIntent(query=app_query, country=country, language=app_lang)
+            app_catalog = await provider.search_offers(app_intent)
+            app_ranking = rank_top_offers(app_catalog.offers, app_intent)
+            assert app_ranking.filtered_accessories_count == 0
+            assert app_ranking.filtered_outliers_count == 0
+            assert app_ranking.degraded_fewer_than_k is True
+            assert {item.offer.offer_id for item in app_ranking.ranked_offers} == {
+                f"{prefix}-amazon-philips-airfryer",
+                f"{prefix}-noon-ninja-airfryer",
+            }
+
+        # Expect 9 upstream misses across the unique normalized intents tested above.
+        assert spy.call_count == 9
     finally:
         await fake_redis.aclose()
 
 
-async def test_phase1_e2e_factory_fallback_and_cross_market_key_isolation() -> None:
+async def test_phase1_e2e_factory_fallback_and_cross_market_key_isolation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """PI.1 — Factory wiring with unreachable Redis falls back cleanly and isolates markets."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    class _UnavailableRedisClient:
+        async def ping(self) -> bool:
+            raise RedisConnectionError("mock unreachable redis")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        redis_store_module.aioredis,
+        "from_url",
+        lambda *_args, **_kwargs: _UnavailableRedisClient(),
+    )
+
     settings = AppSettings(
         _env_file=None,
         redis_url="redis://127.0.0.1:6399/0",

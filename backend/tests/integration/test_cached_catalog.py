@@ -5,6 +5,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from commerce_ai.adapters.cache import redis_store as redis_store_module
 from commerce_ai.adapters.cache.factory import create_cache_store
 from commerce_ai.adapters.cache.memory import InMemoryTTLCache
 from commerce_ai.adapters.cache.redis_store import RedisCacheStore
@@ -79,7 +80,16 @@ async def test_cached_live_serper_with_fakeredis() -> None:
                         "rating": 4.8,
                         "ratingCount": 510,
                         "productId": "sa-live-1",
-                    }
+                    },
+                    {
+                        "title": "Anker Soundcore R50i",
+                        "source": "Noon Saudi",
+                        "link": "https://www.google.com/shopping/product/sa-google-1",
+                        "price": "SAR 99.00",
+                        "rating": 4.6,
+                        "ratingCount": 300,
+                        "productId": "sa-live-2",
+                    },
                 ]
             },
         )
@@ -102,7 +112,7 @@ async def test_cached_live_serper_with_fakeredis() -> None:
         assert http_calls == 1
         assert first.source_mode == CatalogSourceMode.LIVE
         assert first.cache_hit is False
-        assert len(first.offers) == 1
+        assert len(first.offers) == 2
 
         # Verify fakeredis holds the serialized entry with TTL.
         ttl = await fake_redis.ttl(intent.normalized_cache_key())
@@ -115,12 +125,30 @@ async def test_cached_live_serper_with_fakeredis() -> None:
         assert second.source_mode == CatalogSourceMode.LIVE
         assert second.cache_hit is True
         assert second.offers == first.offers
+        assert second.offers[1].url == "https://www.google.com/shopping/product/sa-google-1"
 
     await fake_redis.aclose()
 
 
-async def test_factories_wire_fallback_cache_and_seed_provider() -> None:
+async def test_factories_wire_fallback_cache_and_seed_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """T2.3 — Unreachable Redis falls back to InMemoryTTLCache + SeedCatalogProvider end-to-end."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    class _UnavailableRedisClient:
+        async def ping(self) -> bool:
+            raise RedisConnectionError("mock unreachable redis")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        redis_store_module.aioredis,
+        "from_url",
+        lambda *_args, **_kwargs: _UnavailableRedisClient(),
+    )
+
     settings = AppSettings(
         _env_file=None,
         redis_url="redis://127.0.0.1:6399/0",

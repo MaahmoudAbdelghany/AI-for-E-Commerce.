@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from commerce_ai.domain.errors import OfferValidationError
 from commerce_ai.domain.models import CountryCode, CurrencyCode, StoreId
@@ -160,11 +160,46 @@ MARKET_REGISTRY: Mapping[CountryCode, MarketConfig] = MappingProxyType(
 )
 
 
-def _matches_noon_path(path: str, prefixes: tuple[str, ...]) -> bool:
-    return any(
-        path == prefix or path.startswith(f"{prefix}/") or path.startswith(f"{prefix}-")
-        for prefix in prefixes
-    )
+def has_control_or_whitespace(value: str) -> bool:
+    """Return True if value contains whitespace or ASCII control characters."""
+    return any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def _normalize_and_validate_path_segments(raw_path: str) -> tuple[str, ...]:
+    """Reject path-confusion payloads and return lowercased normalized segments."""
+    if ";" in raw_path or "\\" in raw_path:
+        raise OfferValidationError("Offer URL path contains disallowed characters")
+    lower_raw = raw_path.lower()
+    if "%2f" in lower_raw or "%5c" in lower_raw or "%3b" in lower_raw:
+        raise OfferValidationError("Offer URL path must not contain encoded delimiters")
+
+    segments: list[str] = []
+    for raw_seg in raw_path.split("/"):
+        if raw_seg == "":
+            continue
+        once = unquote(raw_seg)
+        twice = unquote(once)
+        for candidate in (raw_seg, once, twice):
+            if candidate in {".", ".."}:
+                raise OfferValidationError("Offer URL path must not contain traversal segments")
+            if any(ord(ch) < 0x20 or ord(ch) == 0x7F or ch in "/\\;" for ch in candidate):
+                raise OfferValidationError("Offer URL path contains disallowed characters")
+        segments.append(once.lower())
+    return tuple(segments)
+
+
+def _matches_noon_path(segments: tuple[str, ...], prefixes: tuple[str, ...]) -> bool:
+    if not segments:
+        return False
+    first_segment = segments[0]
+    for prefix in prefixes:
+        clean_prefix = prefix.lstrip("/").lower()
+        if first_segment == clean_prefix or (
+            first_segment.startswith(f"{clean_prefix}-")
+            and len(first_segment) > len(clean_prefix) + 1
+        ):
+            return True
+    return False
 
 
 def _validate_regional_offer_url(
@@ -176,11 +211,19 @@ def _validate_regional_offer_url(
     require_attribution_for_google: bool = True,
 ) -> str:
     """Internal URL validator supporting optional Google attribution skip on JSON reload."""
-    cleaned = url.strip()
-    if not cleaned:
+    if not url:
         raise OfferValidationError("Offer URL must not be empty")
+    if has_control_or_whitespace(url):
+        raise OfferValidationError("Offer URL must not contain whitespace or control characters")
+    if "\\" in url:
+        raise OfferValidationError("Offer URL must not contain backslashes")
 
-    parsed = urlsplit(cleaned)
+    try:
+        parsed = urlsplit(url)
+        _ = parsed.port
+    except ValueError as exc:
+        raise OfferValidationError("Offer URL is malformed") from exc
+
     if parsed.scheme.lower() != "https":
         raise OfferValidationError(f"Offer URL must use https:// (got {parsed.scheme!r})")
     if parsed.username is not None or parsed.password is not None:
@@ -194,23 +237,23 @@ def _validate_regional_offer_url(
     if market is None:
         raise OfferValidationError(f"Unsupported country code: {country!r}")
 
-    path = parsed.path.lower()
+    segments = _normalize_and_validate_path_segments(parsed.path)
 
     if store == StoreId.AMAZON and host in market.amazon_domains:
-        return cleaned
+        return url
 
     noon_hosts = (market.noon_host, f"www.{market.noon_host}")
     if (
         store == StoreId.NOON
         and host in noon_hosts
-        and _matches_noon_path(path, market.noon_path_prefixes)
+        and _matches_noon_path(segments, market.noon_path_prefixes)
     ):
-        return cleaned
+        return url
 
     if host in market.google_shopping_domains:
-        if path != "/shopping" and not path.startswith("/shopping/"):
+        if not segments or segments[0] != "shopping":
             raise OfferValidationError(
-                f"Google URL {cleaned!r} must target /shopping/... rather than non-shopping paths"
+                f"Google URL {url!r} must target /shopping/... rather than non-shopping paths"
             )
         if require_attribution_for_google and not market.matches_merchant_attribution(
             store, merchant_attribution
@@ -219,7 +262,7 @@ def _validate_regional_offer_url(
                 f"Google Shopping URL for {country.value}/{store.value} requires matching "
                 f"regional merchant attribution (got {merchant_attribution!r})"
             )
-        return cleaned
+        return url
 
     raise OfferValidationError(
         f"Offer URL host {host!r} is not an authorized {store.value} or Google Shopping "

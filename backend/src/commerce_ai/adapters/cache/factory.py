@@ -52,9 +52,10 @@ async def create_cache_store(
     if not settings.redis_url:
         return InMemoryTTLCache()
 
-    redacted_url = redact_url_password(settings.redis_url)
+    redacted_url: str | None = None
     owned_store: RedisCacheStore | None = None
     try:
+        redacted_url = redact_url_password(settings.redis_url)
         owned_store = RedisCacheStore(
             redis_url=settings.redis_url,
             socket_connect_timeout=ping_timeout_seconds,
@@ -66,6 +67,8 @@ async def create_cache_store(
         if owned_store is not None:
             with contextlib.suppress(RedisError, OSError, CacheStoreError):
                 await owned_store.aclose()
+        if redacted_url is None:
+            redacted_url = redact_url_password(settings.redis_url)
         safe_reason = sanitize_redis_text(str(exc), secret_pw)
         logger.warning(
             "Redis cache unreachable at %s; falling back to InMemoryTTLCache (%s)",

@@ -18,7 +18,6 @@ from commerce_ai.domain.models import (
 )
 
 _ZERO = Decimal("0")
-_MAX_RANKED_CAP = 3
 _WORD_BOUNDARY_LEFT = r"(?<![^\W_])"
 _WORD_BOUNDARY_RIGHT = r"(?![^\W_])"
 
@@ -36,36 +35,54 @@ _ARABIC_CHAR_TRANS = str.maketrans(
     }
 )
 
-_ACCESSORY_PATTERN_BODIES: tuple[str, ...] = (
-    # English accessory keywords (word-boundary + optional plural 's')
-    "cases?",
-    "covers?",
-    "protectors?",
-    "cables?",
-    "cords?",
-    "chargers?",
-    "adapters?",
-    "straps?",
-    "holders?",
-    "mounts?",
-    "skins?",
-    "sleeves?",
-    # Arabic accessory keywords (normalized forms with optional 'ال' prefix)
-    r"(?:ال)?جراب(?:ات)?",
-    r"(?:ال)?كفر(?:ات)?",
-    r"(?:ال)?حافظ(?:ه|ات)",
-    r"(?:ال)?(?:شاحن|شواحن)",
-    r"(?:ال)?اسكرين(?:ه|ات)?",
-    r"(?:ال)?حمايه\s+(?:ال)?شاشه",
-    r"(?:ال)?وصل(?:ه|ات)",
-    r"(?:ال)?كابل(?:ات)?",
-    r"(?:ال)?(?:سلك|اسلاك)",
-    r"(?:ال)?حامل",
-    r"(?:ال)?سوار",
+# Bilingual accessory keywords grouped by semantic concept so queries naming any
+# synonym (e.g. "case" or "جراب") unlock matching bilingual offers (e.g. "جراب ... - ... Case").
+_ACCESSORY_CONCEPT_GROUPS: tuple[tuple[str, ...], ...] = (
+    # cases / covers
+    (
+        "cases?",
+        "covers?",
+        r"(?:ال)?جراب(?:ات)?",
+        r"(?:ال)?كفر(?:ات)?",
+        r"(?:ال)?حافظ(?:ه|ات)",
+    ),
+    # screen protectors
+    (
+        "protectors?",
+        r"(?:ال)?اسكرين(?:ه|ات)?",
+        r"(?:و)?(?:ال)?حمايه\s+(?:و)?(?:ال)?شاشه",
+    ),
+    # chargers / adapters
+    (
+        "chargers?",
+        "adapters?",
+        r"(?:ال)?(?:شاحن|شواحن)",
+    ),
+    # cables / cords
+    (
+        "cables?",
+        "cords?",
+        r"(?:ال)?وصل(?:ه|ات)",
+        r"(?:ال)?كابل(?:ات)?",
+        r"(?:ال)?(?:سلك|اسلاك)",
+    ),
+    # straps
+    (
+        "straps?",
+        r"(?:ال)?سوار",
+    ),
+    # holders / mounts / sleeves / skins
+    (
+        "holders?",
+        "mounts?",
+        "skins?",
+        "sleeves?",
+        r"(?:ال)?حامل",
+    ),
 )
 
-_ACCESSORY_QUERY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(rf"\b{body}\b") for body in _ACCESSORY_PATTERN_BODIES
+_ACCESSORY_GROUP_QUERY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(rf"\b(?:{'|'.join(group)})\b") for group in _ACCESSORY_CONCEPT_GROUPS
 )
 
 
@@ -102,11 +119,12 @@ def _normalize_text(text: str) -> str:
 def _get_disallowed_accessories_regex(
     disallowed_mask: tuple[bool, ...],
 ) -> re.Pattern[str] | None:
-    """Compile and cache a single combined boundary-aware regex for disallowed accessories."""
+    """Compile and cache a single boundary-aware regex for disallowed concept groups."""
     bodies = [
         body
-        for body, disallowed in zip(_ACCESSORY_PATTERN_BODIES, disallowed_mask, strict=True)
+        for group, disallowed in zip(_ACCESSORY_CONCEPT_GROUPS, disallowed_mask, strict=True)
         if disallowed
+        for body in group
     ]
     if not bodies:
         return None
@@ -168,7 +186,7 @@ def _filter_stage1_accessories(
         return list(candidates), 0
 
     disallowed_mask = tuple(
-        pattern.search(normalized_query) is None for pattern in _ACCESSORY_QUERY_PATTERNS
+        pattern.search(normalized_query) is None for pattern in _ACCESSORY_GROUP_QUERY_PATTERNS
     )
     disallowed_regex = _get_disallowed_accessories_regex(disallowed_mask)
     if disallowed_regex is None:
@@ -265,10 +283,9 @@ def _score_and_rank(
 
     rated_scores = [item.bayesian_rating for item in scored if not item.is_unrated_fallback]
     max_rated_bayesian: float | None = max(rated_scores) if rated_scores else None
-    effective_top_k = min(config.top_k, _MAX_RANKED_CAP)
 
     ranked_offers: list[RankedOffer] = []
-    for rank, item in enumerate(scored[:effective_top_k], start=1):
+    for rank, item in enumerate(scored[: config.top_k], start=1):
         reasons: list[str] = []
         if rank == 1:
             reasons.append("best_overall_value")
