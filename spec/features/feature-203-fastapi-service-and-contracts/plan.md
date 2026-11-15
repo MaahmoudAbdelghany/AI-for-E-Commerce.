@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-203-fastapi-service-and-contracts/`
 - **Phase branch**: `phase/2-agent-and-api`
 - **Size**: Medium (4 cohesive execution groups spanning versioned Pydantic v2 API contracts & typed dependencies, middleware & unified `ErrorResponse` handlers, FastAPI app factory/lifespan & REST routes, and offline deterministic `ASGITransport` unit/integration tests)
-- **Status**: Approved (Gate 1)
+- **Status**: Committed
 
 ---
 
@@ -181,10 +181,10 @@ flowchart TD
 3. **`backend/src/commerce_ai/api/middleware.py`**:
    - `RequestIDMiddleware`: validates incoming `X-Request-ID` (`^[A-Za-z0-9._:-]{1,128}$`) or generates UUID4, binds `request.state.request_id`, attaches `X-Request-ID` on every HTTP response.
    - `SlidingWindowRateLimiter` & `SlidingWindowRateLimitMiddleware`: 60s sliding window with `asyncio.Lock`, bounded `OrderedDict` buckets, injectable `clock`, safe IP extraction from validated `X-Forwarded-For` or `request.client.host`, enforced on `/api/v1/chat` & `/api/v1/search` (`rate_limit_rpm > 0`), exempting `/health` & `/api/v1/markets`, returning HTTP `429` with `Retry-After` and `ErrorResponse(error_code="rate_limit_exceeded", retriable=True, ...)`.
-   - `configure_middleware(app: FastAPI, settings: AppSettings, *, clock: Callable[[], float] | None = None) -> None`: configures `SlidingWindowRateLimitMiddleware`, `CORSMiddleware` (`allow_origins=settings.cors_allowed_origins`, `allow_methods=["GET", "POST", "OPTIONS"]`, `expose_headers=["X-Request-ID", "Retry-After"]`, `allow_credentials=False`), and `RequestIDMiddleware` in exact outer-to-inner order (`D3`).
+   - `configure_middleware(app: FastAPI, settings: AppSettings, *, clock: Callable[[], float] | None = None) -> None`: configures `UnhandledExceptionMiddleware` (innermost, inside CORS), `SlidingWindowRateLimitMiddleware`, `CORSMiddleware` (`allow_origins=settings.cors_allowed_origins`, `allow_methods=["GET", "POST", "OPTIONS"]`, `allow_headers=["Content-Type", "X-Request-ID", "Accept"]`, `expose_headers=["X-Request-ID", "Retry-After"]`, `allow_credentials=False`), and `RequestIDMiddleware` in exact outer-to-inner order (`D3`).
 
 4. **`backend/src/commerce_ai/api/errors.py`**:
-   - Registers unified FastAPI exception handlers returning `ErrorResponse` JSON (`X-Request-ID` preserved/attached, `INV-01` secret scrubbing):
+   - Registers unified FastAPI exception handlers returning `ErrorResponse` JSON (`X-Request-ID` preserved/attached, `INV-01` secret scrubbing), plus `UnhandledExceptionMiddleware` inside `CORSMiddleware` so unhandled `500` errors retain CORS and `X-Request-ID` headers (`D3`):
      - `RequestValidationError` -> HTTP `422` (`error_code="validation_error"`, `retriable=False`, sanitized field `loc`/`msg`/`type` details).
      - `CatalogProviderError` -> HTTP `503` (`error_code="catalog_unavailable"`, `retriable=exc.retriable`).
      - `OfferValidationError` -> HTTP `422` (`error_code="offer_validation_error"`, `retriable=False`).
