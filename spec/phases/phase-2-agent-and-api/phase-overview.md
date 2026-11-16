@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/2-agent-and-api`
 - **Roadmap section**: `spec/roadmap.md` → Phase 2
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 2)
-- **Status**: Validated
+- **Status**: Merged
 
 ---
 

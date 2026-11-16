@@ -2,7 +2,7 @@
 
 - **Phase**: `phase-2-agent-and-api`
 - **Branch**: `phase/2-agent-and-api` (vs `main` at `03dc338`)
-- **Status**: `APPROVED-PENDING-HUMAN`
+- **Status**: `APPROVED` (Phase Gate 2 approved by human on 2026-11-15; merged into `main` via `--no-ff` at `48fa64e`)
 - **Commit range (`main..HEAD`)**: `42ae69b..9b4ad0c` (`7` local commits; `65 files changed, 14884 insertions(+), 142 deletions(-)`)
 
 ## Chronological Commit History (`git log --oneline main..HEAD`)
@@ -129,7 +129,7 @@ uv run --no-sync --directory backend pytest tests/integration/test_live_llm_smok
 
 ## 5. Phase Gate 2 Recommendation & Post-Approval Actions
 
-- **Verdict / Status**: **`APPROVED-PENDING-HUMAN`**
+- **Verdict / Status**: **`APPROVED`** (Phase Gate 2 approved by human on 2026-11-15)
 - **Recommendation**: Phase 2 (`phase/2-agent-and-api`) passes every offline test, static check, ASGI contract smoke, architectural invariant (`INV-01`–`INV-09`), and 4-lens deep review audit with **0 open High or Medium blockers**, and is ready for **🛑 Phase Gate 2** approval.
 - **Post-Approval Actions (execute ONLY after human approval at Gate 2)**:
   1. Commit finalized Gate 2 review docs (`spec/phases/phase-2-agent-and-api/phase-review.md` and `spec/phases/phase-2-agent-and-api/phase-overview.md`).
