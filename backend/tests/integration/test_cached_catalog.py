@@ -1,5 +1,8 @@
 """Offline integration tests for CachedCatalogProvider, cache stores, and factories."""
 
+import asyncio
+from decimal import Decimal
+
 import fakeredis.aioredis
 import httpx
 import pytest
@@ -49,7 +52,7 @@ async def test_cached_seed_catalog_miss_then_hit() -> None:
     assert first.source_mode == CatalogSourceMode.SEED
     assert len(first.offers) >= 6
 
-    cached_json = await cache.get(intent.normalized_cache_key())
+    cached_json = await cache.get(intent.catalog_cache_key())
     assert cached_json is not None
 
     second = await cached.search_offers(
@@ -115,7 +118,7 @@ async def test_cached_live_serper_with_fakeredis() -> None:
         assert len(first.offers) == 2
 
         # Verify fakeredis holds the serialized entry with TTL.
-        ttl = await fake_redis.ttl(intent.normalized_cache_key())
+        ttl = await fake_redis.ttl(intent.catalog_cache_key())
         assert 0 < ttl <= 900
 
         second = await provider.search_offers(
@@ -195,7 +198,7 @@ async def test_cached_catalog_error_resilience_and_no_error_caching() -> None:
 
     with pytest.raises(CatalogProviderError):
         await cached_flaky.search_offers(intent)
-    assert await clean_cache.get(intent.normalized_cache_key()) is None
+    assert await clean_cache.get(intent.catalog_cache_key()) is None
 
     recovered = await cached_flaky.search_offers(intent)
     assert flaky.calls == 2
@@ -204,7 +207,7 @@ async def test_cached_catalog_error_resilience_and_no_error_caching() -> None:
 
     # (b1) Corrupt JSON in cache degrades gracefully to underlying provider.
     corrupt_cache = InMemoryTTLCache()
-    await corrupt_cache.set(intent.normalized_cache_key(), "{not-valid-json", ttl_seconds=60)
+    await corrupt_cache.set(intent.catalog_cache_key(), "{not-valid-json", ttl_seconds=60)
     cached_corrupt = CachedCatalogProvider(provider=seed_provider, cache=corrupt_cache)
     res_from_corrupt = await cached_corrupt.search_offers(intent)
     assert res_from_corrupt.cache_hit is False
@@ -227,3 +230,189 @@ async def test_cached_catalog_error_resilience_and_no_error_caching() -> None:
     res_degraded = await cached_broken.search_offers(intent)
     assert res_degraded.cache_hit is False
     assert len(res_degraded.offers) >= 6
+
+
+async def test_cached_catalog_key_reuse_and_language_isolation() -> None:
+    """T2.1 — Budget/rating refinements & Arabic orthography hit cache; ar/en isolate."""
+    spy = _SpyCatalogProvider(SeedCatalogProvider())
+    fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    cache = RedisCacheStore(client=fake_redis)
+    cached = CachedCatalogProvider(provider=spy, cache=cache, ttl_seconds=900)
+    try:
+        ar_base = SearchIntent(query="سماعة أنكر", country=CountryCode.EG, language="ar")
+        res1 = await cached.search_offers(ar_base)
+        assert res1.cache_hit is False
+        assert spy.call_count == 1
+
+        # Arabic orthographic folding + budget/rating refinements reuse the same catalog entry.
+        ar_refined = SearchIntent(
+            query="سماعه انكر",
+            country=CountryCode.EG,
+            max_budget=Decimal("2500"),
+            min_rating=4.5,
+            language="ar",
+        )
+        res2 = await cached.search_offers(ar_refined)
+        assert res2.cache_hit is True
+        assert res2.offers == res1.offers
+        assert spy.call_count == 1
+
+        # Distinct language ('en' vs 'ar') must not collide in catalog_cache_key().
+        en_same_text = SearchIntent(query="سماعة أنكر", country=CountryCode.EG, language="en")
+        res3 = await cached.search_offers(en_same_text)
+        assert res3.cache_hit is False
+        assert spy.call_count == 2
+        assert ar_base.catalog_cache_key() != en_same_text.catalog_cache_key()
+    finally:
+        await fake_redis.aclose()
+
+
+async def test_cached_catalog_single_flight_coalescing() -> None:
+    """T2.2 — Concurrent cold misses coalesce into 1 upstream call and survive waiter cancel."""
+    seed = SeedCatalogProvider()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SlowProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            self.calls += 1
+            started.set()
+            await release.wait()
+            return await seed.search_offers(intent)
+
+    slow = _SlowProvider()
+    cache = InMemoryTTLCache()
+    cached = CachedCatalogProvider(provider=slow, cache=cache, ttl_seconds=1800)
+    intent = SearchIntent(query="Anker earbuds", country=CountryCode.EG, language="en")
+
+    task1 = asyncio.create_task(cached.search_offers(intent))
+    task2 = asyncio.create_task(cached.search_offers(intent))
+    task3 = asyncio.create_task(cached.search_offers(intent))
+    await started.wait()
+
+    # Cancel one waiter mid-flight; remaining callers must still complete cleanly.
+    task1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task1
+
+    release.set()
+    res2, res3 = await asyncio.gather(task2, task3)
+    assert slow.calls == 1
+    assert len(res2.offers) >= 6
+    assert res2.offers == res3.offers
+    assert cached._in_flight == {}
+
+
+async def test_cached_catalog_single_flight_error_cleanup() -> None:
+    """T3.4 — Coalesced failures clean up _in_flight, skip caching, and allow clean retry."""
+    seed = SeedCatalogProvider()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SlowFlakyProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            self.calls += 1
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+                raise CatalogProviderError(provider="serper", retriable=True, reason="timeout")
+            return await seed.search_offers(intent)
+
+    flaky = _SlowFlakyProvider()
+    cache = InMemoryTTLCache()
+    cached = CachedCatalogProvider(provider=flaky, cache=cache, ttl_seconds=1800)
+    intent = SearchIntent(query="Anker earbuds", country=CountryCode.SA, language="en")
+
+    waiters = [asyncio.create_task(cached.search_offers(intent)) for _ in range(3)]
+    await started.wait()
+    release.set()
+    results = await asyncio.gather(*waiters, return_exceptions=True)
+
+    assert flaky.calls == 1
+    assert all(isinstance(item, CatalogProviderError) for item in results)
+    assert await cache.get(intent.catalog_cache_key()) is None
+    assert cached._in_flight == {}
+
+    recovered = await cached.search_offers(intent)
+    assert flaky.calls == 2
+    assert recovered.cache_hit is False
+    assert len(recovered.offers) >= 6
+
+
+async def test_cached_catalog_all_waiter_cancellation_and_distinct_key_concurrency() -> None:
+    """T2.2/T3.4 — Cancelling all error waiters clears _in_flight; distinct keys run together."""
+    seed = SeedCatalogProvider()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BarrierFailProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            self.calls += 1
+            if self.calls == 1:
+                started.set()
+                await release.wait()
+                raise CatalogProviderError(provider="serper", retriable=True, reason="timeout")
+            return await seed.search_offers(intent)
+
+    flaky = _BarrierFailProvider()
+    cache = InMemoryTTLCache()
+    cached = CachedCatalogProvider(provider=flaky, cache=cache, ttl_seconds=1800)
+    intent_cancel = SearchIntent(query="Anker earbuds", country=CountryCode.EG, language="en")
+
+    waiters = [asyncio.create_task(cached.search_offers(intent_cancel)) for _ in range(3)]
+    await started.wait()
+    for waiter in waiters:
+        waiter.cancel()
+    cancelled_results = await asyncio.gather(*waiters, return_exceptions=True)
+    assert all(isinstance(item, asyncio.CancelledError) for item in cancelled_results)
+
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert flaky.calls == 1
+    assert cached._in_flight == {}
+    assert await cache.get(intent_cancel.catalog_cache_key()) is None
+
+    recovered = await cached.search_offers(intent_cancel)
+    assert flaky.calls == 2
+    assert recovered.cache_hit is False
+
+    # Distinct catalog_cache_key() cold misses execute concurrently without blocking each other.
+    key_a_started = asyncio.Event()
+    key_a_release = asyncio.Event()
+
+    class _DistinctKeyProvider:
+        async def search_offers(self, intent: SearchIntent) -> CatalogSearchResult:
+            if intent.country == CountryCode.SA:
+                key_a_started.set()
+                await key_a_release.wait()
+            return await seed.search_offers(intent)
+
+    concurrent_cached = CachedCatalogProvider(
+        provider=_DistinctKeyProvider(),
+        cache=InMemoryTTLCache(),
+        ttl_seconds=600,
+    )
+    task_sa = asyncio.create_task(
+        concurrent_cached.search_offers(
+            SearchIntent(query="Anker earbuds", country=CountryCode.SA, language="en")
+        )
+    )
+    await key_a_started.wait()
+    res_ae = await concurrent_cached.search_offers(
+        SearchIntent(query="Anker earbuds", country=CountryCode.AE, language="en")
+    )
+    assert len(res_ae.offers) >= 1
+    assert not task_sa.done()
+    key_a_release.set()
+    res_sa = await task_sa
+    assert len(res_sa.offers) >= 1

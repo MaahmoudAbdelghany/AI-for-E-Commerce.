@@ -88,7 +88,7 @@ async def test_phase1_e2e_bilingual_traps_and_cache_across_markets(
         assert all(offer.currency == expected_currency for offer in miss_result.offers)
 
         if fake_redis is not None:
-            ttl = await fake_redis.ttl(intent.normalized_cache_key())
+            ttl = await fake_redis.ttl(intent.catalog_cache_key())
             assert 0 < ttl <= 1800
 
         # Repeat normalized query: cache hit with zero repeat upstream provider calls.
@@ -288,8 +288,10 @@ async def test_phase1_e2e_additional_categories_and_intent_filters(
                 f"{prefix}-noon-ninja-airfryer",
             }
 
-        # Expect 9 upstream misses across the unique normalized intents tested above.
-        assert spy.call_count == 9
+        # Expect 8 upstream misses: accessory_opt_in_intent reuses the cached "Anker earbuds"
+        # catalog entry from rated_only_intent via SearchIntent.catalog_cache_key().
+        assert acc_catalog.cache_hit is True
+        assert spy.call_count == 8
     finally:
         await fake_redis.aclose()
 
@@ -334,7 +336,7 @@ async def test_phase1_e2e_factory_fallback_and_cross_market_key_isolation(
             max_budget=Decimal("100000.00"),
             language="ar",
         )
-        seen_keys.add(intent.normalized_cache_key())
+        seen_keys.add(intent.catalog_cache_key())
 
         miss = await provider.search_offers(intent)
         assert miss.cache_hit is False

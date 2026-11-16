@@ -2,7 +2,7 @@
 
 - **Date**: 2026-11-15
 - **Raised during**: Phase 1 (`phase/1-core-foundation`)
-- **Status**: Open
+- **Status**: Done (Implemented in Phase 2 — Feature 2.1)
 - **Type**: Tech debt
 
 ## Question / Idea
@@ -34,9 +34,9 @@ Should we tighten three non-blocking Phase 1 design constraints—locked by Feat
 ## Recommendations
 | # | Recommendation | Human decision (accepted / changed / rejected) |
 |:---|:---|:---|
-| 1 | Migrate `AppSettings.redis_url` from `str | None` to `SecretStr | None` (unwrapping in `create_cache_store` / `RedisCacheStore`) or add a redacting Pydantic `@field_serializer` on `redis_url` so `model_dump()` and `model_dump_json()` mask Redis passwords consistently with `repr()`/`str()`/`safe_summary()` (update Feature 1.1 `R4`). | |
-| 2 | Update `SearchIntent.normalized_cache_key()` (or add a dedicated upstream catalog cache key method) to apply Arabic orthographic folding (`أ/إ/آ/ٱ -> ا`, `ة -> ه`, `ى -> ي`) and separate `{country}:{store}:{language}:{slug}` for upstream catalog caching from downstream `max_budget`/`min_rating` ranking filters (update Feature 1.1 `R9` / `D6`). | |
-| 3 | Add per-key single-flight request coalescing (`asyncio.Lock` + in-flight future/task registry keyed by `cache_key`) inside `CachedCatalogProvider.search_offers()` so concurrent cold-cache/expired misses share a single upstream provider call while propagating `CatalogProviderError` cleanly without caching errors. | |
+| 1 | Migrate `AppSettings.redis_url` from `str \| None` to `SecretStr \| None` (unwrapping in `create_cache_store` / `RedisCacheStore`) or add a redacting Pydantic `@field_serializer` on `redis_url` so `model_dump()` and `model_dump_json()` mask Redis passwords consistently with `repr()`/`str()`/`safe_summary()` (update Feature 1.1 `R4`). | accepted (folded into Phase 2 Feature 2.1 via interview A1) |
+| 2 | Update `SearchIntent.normalized_cache_key()` (or add a dedicated upstream catalog cache key method) to apply Arabic orthographic folding (`أ/إ/آ/ٱ -> ا`, `ة -> ه`, `ى -> ي`) and separate `{country}:{store}:{language}:{slug}` for upstream catalog caching from downstream `max_budget`/`min_rating` ranking filters (update Feature 1.1 `R9` / `D6`). | accepted (folded into Phase 2 Feature 2.1 via interview A1) |
+| 3 | Add per-key single-flight request coalescing (`asyncio.Lock` + in-flight future/task registry keyed by `cache_key`) inside `CachedCatalogProvider.search_offers()` so concurrent cold-cache/expired misses share a single upstream provider call while propagating `CatalogProviderError` cleanly without caching errors. | accepted (folded into Phase 2 Feature 2.1 via interview A1) |
 
 ## Next Step
-Schedule via `sdd-replan` (Mode B) into **Phase 2** (`Feature 2.3 — FastAPI Service` or a small pre-2.3 `S` hardening slice): estimated size **`S`** (~1 day total across config serialization, cache key migration, and `CachedCatalogProvider` single-flight coalescing + concurrency tests).
+Implemented in **Phase 2 — Feature 2.1** on branch `phase/2-agent-and-api` (`spec/phases/phase-2-agent-and-api/phase-overview.md` `P1` and `spec/features/feature-201-llm-routing-guardrails-intent/`), with amended Phase 1 specs (`feature-101` & `feature-103`) verified and marked complete.

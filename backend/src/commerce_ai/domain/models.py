@@ -1,10 +1,10 @@
-"""Pure marketplace domain enums and validated value/search schemas."""
+"""Pure marketplace domain enums and validated value/search/agent schemas."""
 
 import hashlib
 import re
 import unicodedata
 from collections.abc import Mapping
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Literal, Self
 from urllib.parse import urlsplit
@@ -25,6 +25,7 @@ from pydantic import ValidationError as PydanticValidationError
 from commerce_ai.domain.errors import OfferValidationError
 
 _CENTS = Decimal("0.01")
+MAX_BUDGET_DECIMAL = Decimal("10000000.00")
 _HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
 
 
@@ -54,7 +55,18 @@ def _validate_clean_url_input(value: Any, *, field_name: str) -> str:
     return raw
 
 
-_ARABIC_DIACRITICS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED\u0640]")
+_ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]")
+_ARABIC_ORTHOGRAPHY_TRANS = str.maketrans(
+    {
+        "\u0622": "\u0627",  # آ -> ا
+        "\u0623": "\u0627",  # أ -> ا
+        "\u0625": "\u0627",  # إ -> ا
+        "\u0671": "\u0627",  # ٱ -> ا
+        "\u0629": "\u0647",  # ة -> ه
+        "\u0649": "\u064a",  # ى -> ي
+        **dict(zip("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789", strict=True)),
+    }
+)
 _NON_ALNUM_ARABIC_RE = re.compile(r"[^a-z0-9\u0621-\u064A\u0660-\u0669\u06F0-\u06F9]+")
 
 
@@ -96,15 +108,50 @@ class CatalogSourceMode(StrEnum):
     LIVE = "live"
 
 
-def _validate_positive_currency_decimal(value: Decimal, *, field_name: str) -> Decimal:
-    """Validate finiteness, positive sign, and 2-decimal currency quantization."""
-    if not value.is_finite():
-        raise OfferValidationError(f"{field_name} must be a finite Decimal")
-    if value <= Decimal("0"):
-        raise OfferValidationError(f"{field_name} must be greater than 0")
-    quantized = value.quantize(_CENTS, rounding=ROUND_HALF_UP)
+class TurnAction(StrEnum):
+    """Classified conversational action for a user turn."""
+
+    SEARCH = "search"
+    COMPARE = "compare"
+    CLARIFY = "clarify"
+    OFF_TOPIC = "off_topic"
+    REFUSE = "refuse"
+
+
+class TurnStatus(StrEnum):
+    """Final execution status returned for a conversational turn."""
+
+    OK = "ok"
+    CLARIFY = "clarify"
+    OFF_TOPIC = "off_topic"
+    REFUSED = "refused"
+    DEGRADED = "degraded"
+
+
+def _validate_positive_currency_decimal(
+    value: Decimal,
+    *,
+    field_name: str,
+    max_value: Decimal | None = None,
+) -> Decimal:
+    """Validate finiteness, positive sign, optional upper bound, and 2-decimal quantization."""
+    try:
+        if not value.is_finite():
+            raise OfferValidationError(f"{field_name} must be a finite Decimal")
+        if value <= Decimal("0"):
+            raise OfferValidationError(f"{field_name} must be greater than 0")
+        if max_value is not None and value > max_value:
+            raise OfferValidationError(f"{field_name} must be <= {max_value}")
+        quantized = value.quantize(_CENTS, rounding=ROUND_HALF_UP)
+    except OfferValidationError:
+        raise
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise OfferValidationError(f"{field_name} must be a valid currency amount") from exc
+
     if quantized <= Decimal("0.00"):
         raise OfferValidationError(f"{field_name} must remain greater than 0.00 after quantization")
+    if max_value is not None and quantized > max_value:
+        raise OfferValidationError(f"{field_name} must be <= {max_value}")
     return quantized
 
 
@@ -220,7 +267,11 @@ class SearchIntent(BaseModel):
     query: str
     country: CountryCode
     store: StoreFilter = StoreFilter.BOTH
-    max_budget: Decimal | None = None
+    max_budget: Decimal | None = Field(
+        default=None,
+        le=MAX_BUDGET_DECIMAL,
+        allow_inf_nan=False,
+    )
     min_rating: float | None = Field(default=None, ge=0.0, le=5.0, allow_inf_nan=False)
     exclude_keywords: tuple[str, ...] = ()
     include_accessories: bool = False
@@ -236,23 +287,34 @@ class SearchIntent(BaseModel):
     def _validate_max_budget(cls, value: Decimal | None) -> Decimal | None:
         if value is None:
             return None
-        return _validate_positive_currency_decimal(value, field_name="max_budget")
+        return _validate_positive_currency_decimal(
+            value,
+            field_name="max_budget",
+            max_value=MAX_BUDGET_DECIMAL,
+        )
 
-    def normalized_cache_key(self) -> str:
-        """Return canonical lowercase '{country}:{store}:{slug}:{budget}:{min_rating}' key."""
+    def _query_slug(self) -> str:
         normalized = unicodedata.normalize("NFKC", self.query).lower()
         without_diacritics = _ARABIC_DIACRITICS_RE.sub("", normalized)
-        slug = _NON_ALNUM_ARABIC_RE.sub("-", without_diacritics).strip("-")
+        folded = without_diacritics.translate(_ARABIC_ORTHOGRAPHY_TRANS)
+        slug = _NON_ALNUM_ARABIC_RE.sub("-", folded).strip("-")
         if not slug:
             digest = hashlib.sha256(self.query.strip().encode("utf-8")).hexdigest()[:8]
-            slug = f"q-{digest}"
+            return f"q-{digest}"
+        return slug
 
-        budget_part = f"{self.max_budget:.2f}" if self.max_budget is not None else "none"
-        rating_part = f"{self.min_rating:.2f}" if self.min_rating is not None else "none"
+    def catalog_cache_key(self) -> str:
+        """Return canonical lowercase '{country}:{store}:{language}:{slug}' catalog cache key."""
         return (
             f"{self.country.value.lower()}:{self.store.value.lower()}:"
-            f"{slug}:{budget_part}:{rating_part}"
+            f"{self.language.lower()}:{self._query_slug()}"
         )
+
+    def normalized_cache_key(self) -> str:
+        """Return canonical '{country}:{store}:{language}:{slug}:{budget}:{min_rating}' key."""
+        budget_part = f"{self.max_budget:.2f}" if self.max_budget is not None else "none"
+        rating_part = f"{self.min_rating:.2f}" if self.min_rating is not None else "none"
+        return f"{self.catalog_cache_key()}:{budget_part}:{rating_part}"
 
 
 class RankedOffer(BaseModel):
@@ -288,3 +350,103 @@ class CatalogSearchResult(BaseModel):
     offers: list[ProductOffer]
     source_mode: CatalogSourceMode
     cache_hit: bool = False
+
+
+class LLMMessage(BaseModel):
+    """Single role-tagged message passed to an LLM completion port."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+class LLMRequest(BaseModel):
+    """Bounded completion request dispatched to an LLMClient adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    messages: tuple[LLMMessage, ...] = Field(min_length=1)
+    max_tokens: int = Field(default=350, ge=1, le=1024)
+    temperature: float = Field(default=0.0, ge=0.0, le=1.0, allow_inf_nan=False)
+    json_mode: bool = False
+    json_schema: dict[str, Any] | None = None
+    task_name: str = "general"
+
+
+class LLMResponse(BaseModel):
+    """Completion output and usage telemetry returned by an LLMClient adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    provider: str
+    model: str
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    latency_ms: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    used_fallback_model: bool = False
+
+
+class SessionTurn(BaseModel):
+    """Compact conversational turn stored in session memory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str
+    action: TurnAction | None = None
+    created_at_iso: str
+
+
+class SessionState(BaseModel):
+    """Persisted multi-turn shopping session state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    market: CountryCode = CountryCode.EG
+    last_intent: SearchIntent | None = None
+    last_ranked_offers: list[RankedOffer] = Field(default_factory=list)
+    turns: list[SessionTurn] = Field(default_factory=list)
+    updated_at_epoch: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, value: str) -> str:
+        return _require_non_empty_text(value, field_name="session_id")
+
+
+class TurnTelemetry(BaseModel):
+    """Execution cost, cache, fallback, and latency telemetry for a single turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm_calls: int = Field(default=0, ge=0, le=2)
+    catalog_called: bool = False
+    catalog_cache_hit: bool = False
+    catalog_source_mode: CatalogSourceMode | None = None
+    used_rule_intent_fallback: bool = False
+    used_template_summary: bool = False
+    degraded_reason: str | None = None
+    latency_ms: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+
+
+class ChatTurnResult(BaseModel):
+    """Complete workflow response for a single conversational shopping turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    status: TurnStatus
+    reply: str
+    action: TurnAction
+    active_intent: SearchIntent | None = None
+    top_offers: list[RankedOffer] = Field(default_factory=list)
+    ranking_result: RankingResult | None = None
+    telemetry: TurnTelemetry
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, value: str) -> str:
+        return _require_non_empty_text(value, field_name="session_id")
