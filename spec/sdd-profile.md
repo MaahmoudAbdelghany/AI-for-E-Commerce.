@@ -6,16 +6,16 @@
 ## Commands
 | Purpose | Command |
 |:---|:---|
-| Install / sync deps (backend) | `uv sync --directory backend --all-extras --dev` `(unverified — greenfield target, Feature 1.1)` |
+| Install / sync deps (backend) | `uv sync --directory backend --all-extras --dev` `(confirmed — verified Feature 1.1 T5.1)`; lock check: `uv lock --directory backend --check` `(confirmed — verified Phases 1–2)` |
 | Install / sync deps (frontend) | `npm --prefix frontend ci` `(unverified — greenfield target, Feature 3.1)` |
-| Full test suite (backend) | `uv run --directory backend pytest -v` `(unverified — greenfield target, Feature 1.1)` |
-| Targeted tests (backend) | `uv run --directory backend pytest <file> -v` `(unverified — greenfield target, Feature 1.1)` |
-| Lint (backend) | `uv run --directory backend ruff check .` `(unverified — greenfield target, Feature 1.1)` |
-| Format check (backend) | `uv run --directory backend ruff format --check .` `(unverified — greenfield target, Feature 1.1)` |
-| Type check (backend) | `uv run --directory backend mypy src` `(unverified — greenfield target, Feature 1.1)` |
+| Full test suite (backend) | `uv run --directory backend pytest -v` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
+| Targeted tests (backend) | `uv run --directory backend pytest <file> -v` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
+| Lint (backend) | `uv run --directory backend ruff check .` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
+| Format check (backend) | `uv run --directory backend ruff format --check .` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
+| Type check (backend) | `uv run --directory backend mypy src` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
 | Lint & Type check (frontend) | `npm --prefix frontend run lint && npm --prefix frontend run typecheck` `(unverified — greenfield target, Feature 3.1)` |
 | Build (frontend) | `npm --prefix frontend run build` `(unverified — greenfield target, Feature 3.1)` |
-| Run app (manual checks) | `docker compose up --build` (or `uv run --directory backend uvicorn commerce_ai.main:app --reload --port 8000` + `npm --prefix frontend run dev`) `(unverified — greenfield target)` |
+| Run app (manual checks) | Backend: `uv run --directory backend uvicorn commerce_ai.main:app --reload --port 8000` `(confirmed — ASGI smoke T7.1, Phase 2)`; `npm --prefix frontend run dev` `(unverified — greenfield target, Feature 3.1)`; `docker compose up --build` `(unverified — greenfield target, Feature 4.2)` |
 | Extra gates (evals, e2e, security scans) | `uv run --directory backend pytest tests/evals -v` (mandatory from Feature 4.1 onward) `(unverified — greenfield target)` |
 
 ## Main Branch & Remote

@@ -236,3 +236,24 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 - **Phase Integration (`PI.1`–`PI.3`)**: `ce3387b` (`test(phase-2): add end-to-end phase integration tests and PI evidence`) — added 13 offline E2E runs across 8 functions in `backend/tests/integration/test_phase2_e2e.py` (#48) and independently verified in #49.
 - **4-Lens Deep Review Remediation (`9b4ad0c`)**: `9b4ad0c` (`fix(phase-2): resolve security, architecture, spec-drift, and test review findings`) — resolved all 2 High and 11 Medium findings from the 4-lens audit (`#56`–`#59`), covering guardrail `NFKD`+`Cf`/`Mn`/tatweel/Tag/dot-Luhn hardening, `max_budget <= 10,000,000` & `InvalidOperation` `422` handling, `trusted_proxy_cidrs` right-to-left `X-Forwarded-For` extraction, aligned `_QUERY_SECRET_RE`, `ON CONFLICT DO UPDATE` + SQLite `WAL`/`busy_timeout`/60s cleanup + `ResilientSessionRepository` 30s cooldown recovery, Call #2 outage skip in `"auto"`, shared lifespan `httpx.AsyncClient`, per-key cache lock, deterministic `test_phase2_e2e.py` redaction assertion, full Phase 1/2 spec syncs, and Phase 4 backlog capture (`spec/backlog/2026-11-15-phase2-post-llm-and-distributed-rate-limit-followups.md`); committed across `44` files (`+1567/-324`) after independent `#65` verification (`163 passed, 1 deselected in 17.22s`, `T7.1 OK`).
 - **Phase Gate 2 Deep Review Report (`phase-review.md`)**: Authored [`spec/phases/phase-2-agent-and-api/phase-review.md`](phase-review.md) (`Status: APPROVED-PENDING-HUMAN`) and finalized `phase-overview.md` (`Status: Validated`) ahead of human Phase Gate 2 approval (`CHANGELOG.md`, `git push`, `merge --no-ff`, and `sdd-replan` Mode D deferred until Gate 2 approval).
+---
+
+## 8. Retrospective (`sdd-replan` Mode D, item 3 — recorded 2026-11-15 after merge `48fa64e`)
+
+**What went well**
+- Swarm-based phase mode worked: the `P7` disjoint file partition let Features 2.2 and 2.3 build against locked §4.2 contracts with zero merge conflicts, and per-feature independent verifier runs caught issues before each local commit.
+- The 4-lens deep review paid off: it caught **2 High** findings (Unicode `Cf`/`Mn`/Tag guardrail bypass; non-atomic session upsert + permanent resilient-repository flip) plus 11 Medium, all fixed in `9b4ad0c` before Gate 2.
+- Folding the Phase 1 backlog into Feature 2.1 settled shared settings, models, and cache keys before concurrent API traffic arrived.
+
+**Spec gaps**
+- The `sqlalchemy[asyncio]` extra (`greenlet`) was missing from the Phase 2 dependency list in `P7`, requiring the unplanned `c19e663` `fix(deps)` commit mid-phase.
+- Constitution wording (`spec/architecture.md`, `spec/tech.md`) still carried Phase 0 placeholder names; aligned in this phase close (`catalog_cache_key()`, `rank_top_offers`, `ChatResponse`, `httpx`-based `LLMClient`).
+
+**Process friction → Mode E candidates**
+- A flaky substring assertion (`"732" not in res.text` colliding with random UUID4 `request_id` / `latency_ms`) slipped into `test_phase2_e2e.py`. Candidate: add a `sdd-validation` / Test-lens rule to never assert substrings over whole response bodies containing random or timing fields — assert on parsed, field-scoped values with fixed request IDs.
+- Candidate: when a spec lists async ORM dependencies, require the dependency checklist to include driver extras (`sqlalchemy[asyncio]`, `aiosqlite`, `asyncpg`) and a `uv lock --check` + import smoke at Phase Gate 1.
+- Candidate: confirm `spec/sdd-profile.md` commands at the first phase close after they are verified (Phase 1 deferred this to Phase 2).
+
+**Next phase (Mode D, item 6)**
+- Quick readiness check: Phase 3 (`spec/roadmap.md`, Features 3.1–3.2) is ready to start — it depends only on the merged OpenAPI 3.1 contract (`/openapi.json`, `ChatResponse`, `SearchResponse`, `MarketsResponse`, `ErrorResponse`) and default CORS origin `http://localhost:3000`. Frontend commands in `spec/sdd-profile.md` remain `(unverified — greenfield target, Feature 3.1)` and must be verified there. No roadmap change required.
+- Proposed branch: `phase/3-rtl-web-experience` (from `main`), started in a fresh context.

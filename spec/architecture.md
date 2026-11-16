@@ -58,7 +58,7 @@ sequenceDiagram
         LG-->>API: Clarification prompt (1 short Arabic question)
         API-->>UI: Ask user to clarify product
     else Intent is actionable
-        LG->>CACHE: Lookup normalized intent key (EG:noon:anker-bluetooth-earbuds)
+        LG->>CACHE: Lookup catalog_cache_key() (eg:noon:en:anker-bluetooth-earbuds)
         alt Cache Hit (< 50 ms)
             CACHE-->>LG: Cached list[ProductOffer]
         else Cache Miss
@@ -72,11 +72,11 @@ sequenceDiagram
             end
         end
 
-        LG->>RANK: filter_and_rank_top_k(offers, intent, k=3)
+        LG->>RANK: rank_top_offers(offers, intent, config) (top_k = 3)
         RANK-->>LG: Top-3 RankedOffer (value_score, bayesian_rating, price_norm, match_reasons)
         LG->>LLM: Call #2 (Optional/Lightweight) — Concise Arabic recommendation summary
         LLM-->>LG: Grounded summary referencing only the 3 verified offers
-        LG-->>API: ChatResponse (summary, top_3_offers, telemetry_meta)
+        LG-->>API: ChatResponse (reply, top_offers, telemetry)
         API-->>UI: Render RTL message + 3 Comparison Cards + Outbound Store Links
     end
 ```
