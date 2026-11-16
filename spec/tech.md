@@ -11,7 +11,7 @@
 | Python Package Manager | `uv` | `0.13+` (`0.13.7` verified in env) | Fast, deterministic lockfile & virtualenv management |
 | Backend API | `FastAPI` + `Pydantic v2` + `Uvicorn` | Latest stable `(confirmed target)` | Async HTTP/SSE API, strict request/response validation, OpenAPI 3.1 generation |
 | Agent Orchestration | `LangGraph` | Latest stable `(confirmed target)` | Bounded, stateful workflow graph with deterministic edges and session checkpointing |
-| LLM Routing Layer | Typed `LLMProvider` (`LiteLLM` / native async SDKs) | Latest stable `(confirmed target)` | Model routing across low-cost providers (`Gemini 2.5 Flash`, `Groq`, `OpenAI mini`, `AWS Bedrock Haiku/Nova`) + offline `FakeLLMProvider` |
+| LLM Routing Layer | Typed `LLMClient` port + lightweight async `httpx` adapters (`GeminiLLMClient`, `OpenAICompatibleLLMClient`, `ModelRouterLLMClient`; no `LiteLLM`) | `httpx` (implemented in Phase 2) | Model routing across low-cost providers (`Gemini 2.5 Flash`, `Groq`, `OpenAI mini`; `AWS Bedrock Haiku/Nova` optional future adapter) + offline `FakeLLMClient` |
 | Marketplace Search | `httpx` + `Serper.dev` Shopping/Search API + `SeedCatalogProvider` | Async HTTP `(confirmed target)` | Fast sub-second Noon & Amazon (`EG`/`SA`/`AE`) offer retrieval without fragile scraping, paired with deterministic local seed data |
 | Primary Database | `PostgreSQL` (`SQLAlchemy 2.0` async + `Alembic`) + `SQLite` (`aiosqlite`) | PG `16` `(confirmed target)` | Session state, query audit logs, and future B2B catalog/tenant configs; `SQLite` fallback for zero-setup local dev & CI |
 | Caching Layer | `Redis` + In-Memory `TTLCache` | Redis `7` `(confirmed target)` | Exact & normalized-intent caching to cut external API/LLM costs and achieve `< 300 ms` repeat responses |
@@ -53,7 +53,7 @@ Every feature specification, code change, and review MUST uphold these numbered 
 │   │       ├── agent/                  # LangGraph state, nodes, model router policy, prompt templates, guardrails
 │   │       ├── adapters/
 │   │       │   ├── catalog/            # SeedCatalogProvider, SerperShoppingProvider, Composite/Cached provider
-│   │       │   ├── llm/                # LiteLLM / multi-provider client + FakeLLMClient
+│   │       │   ├── llm/                # httpx multi-provider LLMClient adapters + FakeLLMClient
 │   │       │   ├── cache/              # RedisCacheStore + InMemoryTTLCache
 │   │       │   ├── session/            # SQLAlchemy (Postgres/SQLite) + InMemorySessionStore
 │   │       │   └── observability/      # Langfuse tracer + structured logger
