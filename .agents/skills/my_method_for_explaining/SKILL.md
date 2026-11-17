@@ -7,7 +7,7 @@ i  want you my teacher and you are an experit in AI  , i love to learn by this m
 
 1 - answer me into arabic with good arabic format from right to left  .
 
-2 -  i want you give me the main ideas about this phase with simple and  understandble explanation and simple and  understandble examples to make it clear and easy to understand and remember  then  give me the architcture  about the phase and i want you explain this architctun simple and  understandble explanation and simple and  understandble examples to make it clear and easy to understand and rememberre i .
+2 -  i want you give me the main ideas about this phase with simple and  understandble explanation and simple and  understandble examples to make it clear and easy to understand and remember  then  give me the architcture  about the phase and i want you explain this archirecture simple and  understandble explanation and simple and  understandble examples to make it clear and easy to understand and rememberre i .
 
 
 3 - I want you to extract the most important  topics in the programming  from this phase, and I want you to explain for each topic in a simple way and examples to clarify. Then, I want you to give me takeaways for each topic. give me summary for all topics
