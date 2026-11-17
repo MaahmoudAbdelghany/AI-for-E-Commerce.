@@ -7,15 +7,16 @@
 | Purpose | Command |
 |:---|:---|
 | Install / sync deps (backend) | `uv sync --directory backend --all-extras --dev` `(confirmed — verified Feature 1.1 T5.1)`; lock check: `uv lock --directory backend --check` `(confirmed — verified Phases 1–2)` |
-| Install / sync deps (frontend) | `npm --prefix frontend ci` `(unverified — greenfield target, Feature 3.1)` |
+| Install / sync deps (frontend) | `npm --prefix frontend ci` `(confirmed — verified Phase 3; Windows PowerShell Restricted ExecutionPolicy invokes npm.cmd)` |
 | Full test suite (backend) | `uv run --directory backend pytest -v` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
+| Full test suite (frontend) | `npm --prefix frontend test` `(confirmed — verified Phase 3, Vitest + Testing Library offline; npm.cmd in PowerShell)` |
 | Targeted tests (backend) | `uv run --directory backend pytest <file> -v` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
 | Lint (backend) | `uv run --directory backend ruff check .` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
 | Format check (backend) | `uv run --directory backend ruff format --check .` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
 | Type check (backend) | `uv run --directory backend mypy src` `(confirmed — verified Phases 1–2; --no-sync variant used in validation runs)` |
-| Lint & Type check (frontend) | `npm --prefix frontend run lint && npm --prefix frontend run typecheck` `(unverified — greenfield target, Feature 3.1)` |
-| Build (frontend) | `npm --prefix frontend run build` `(unverified — greenfield target, Feature 3.1)` |
-| Run app (manual checks) | Backend: `uv run --directory backend uvicorn commerce_ai.main:app --reload --port 8000` `(confirmed — ASGI smoke T7.1, Phase 2)`; `npm --prefix frontend run dev` `(unverified — greenfield target, Feature 3.1)`; `docker compose up --build` `(unverified — greenfield target, Feature 4.2)` |
+| Lint & Type check (frontend) | `npm --prefix frontend run lint && npm --prefix frontend run typecheck` `(confirmed — verified Phase 3; Windows PowerShell Restricted ExecutionPolicy invokes npm.cmd)` |
+| Build (frontend) | `npm --prefix frontend run build` `(confirmed — verified Phase 3; Windows PowerShell Restricted ExecutionPolicy invokes npm.cmd)` |
+| Run app (manual checks) | Backend: `uv run --directory backend uvicorn commerce_ai.main:app --reload --port 8000` `(confirmed — ASGI smoke T7.1, Phase 2)`; `npm --prefix frontend run dev` `(confirmed — verified Phase 3; Windows PowerShell Restricted ExecutionPolicy invokes npm.cmd)`; `docker compose up --build` `(unverified — greenfield target, Feature 4.2)` |
 | Extra gates (evals, e2e, security scans) | `uv run --directory backend pytest tests/evals -v` (mandatory from Feature 4.1 onward) `(unverified — greenfield target)` |
 
 ## Main Branch & Remote
