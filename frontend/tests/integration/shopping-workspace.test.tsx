@@ -216,9 +216,6 @@ function renderWorkspaceWithShell() {
 
 describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
   beforeEach(() => {
-    window.localStorage.clear();
-    document.documentElement.lang = "ar";
-    document.documentElement.dir = "rtl";
     mockedFetchMarkets.mockResolvedValue(MOCK_MARKETS);
     mockedFetchHealth.mockResolvedValue(MOCK_HEALTH);
     mockedSendChatTurn.mockReset();
@@ -229,7 +226,7 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     vi.clearAllMocks();
   });
 
-  it("default chat mode starter prompts and Enter/Send update ChatThread, Top-3 grid, telemetry, and session storage", async () => {
+  it("default chat mode starter prompts, Shift+Enter newline, and Enter/Send update ChatThread (dir=auto), Top-3 grid, telemetry, and session storage", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
 
@@ -261,22 +258,34 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
       );
     });
 
-    expect(screen.getByText("إليك أفضل 3 عروض موثقة لسماعات أنكر.")).toBeInTheDocument();
-    expect(screen.getByText("Anker Soundcore Liberty 4 NC")).toBeInTheDocument();
+    const userBubble = screen.getByText(firstPrompt.queryAr);
+    const assistantBubble = screen.getByText("إليك أفضل 3 عروض موثقة لسماعات أنكر.");
+    expect(userBubble).toHaveAttribute("dir", "auto");
+    expect(assistantBubble).toHaveAttribute("dir", "auto");
+
+    const topHeading = screen.getByRole("heading", {
+      level: 3,
+      name: "Anker Soundcore Liberty 4 NC",
+    });
+    expect(topHeading).toHaveAttribute("dir", "auto");
     expect(screen.getByText("Anker Soundcore R50i")).toBeInTheDocument();
     expect(screen.getByText("Anker Soundcore Life P3")).toBeInTheDocument();
     expect(screen.getByText(arDict.workspace.telemetry.sourceSeed)).toBeInTheDocument();
     expect(screen.getByText("req-chat-1")).toBeInTheDocument();
 
-    // Submit follow-up via Enter in composer
+    // Shift+Enter inserts a newline without submitting; Enter submits follow-up
     const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
-    await user.type(composer, "أرخص سعر متاح{Enter}");
+    expect(composer).toHaveAttribute("dir", "auto");
+    await user.type(composer, "أرخص سعر متاح{Shift>}{Enter}{/Shift}تحت 3000");
+    expect(mockedSendChatTurn).toHaveBeenCalledTimes(1);
+    expect(composer).toHaveValue("أرخص سعر متاح\nتحت 3000");
+    await user.type(composer, "{Enter}");
 
     await waitFor(() => {
       expect(mockedSendChatTurn).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          message: "أرخص سعر متاح",
+          message: "أرخص سعر متاح\nتحت 3000",
           session_id: "sess-eg-1",
           country: "EG",
         }),
@@ -294,9 +303,16 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     expect(stored.EG.activeComparison.rankedOffers).toHaveLength(3);
   });
 
-  it("ModeToggle switches to zero-LLM Direct Search with min_rating and include_accessories feeding unified comparison grid", async () => {
+  it("ModeToggle switches to zero-LLM Direct Search (0 LLM calls) with min_rating/include_accessories and preserves existing chat thread", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
+
+    mockedSendChatTurn.mockResolvedValueOnce(
+      makeChatResponse({
+        session_id: "sess-preserve-thread",
+        reply: "نتائج المحادثة المحفوظة",
+      }),
+    );
 
     mockedSearchOffers.mockResolvedValueOnce(
       makeSearchResponse({
@@ -319,9 +335,16 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
 
     renderWorkspaceWithShell();
 
+    // Seed an existing chat thread first so we verify ModeToggle preserves it.
+    const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
+    await user.type(composer, "سماعة أنكر{Enter}");
+    await waitFor(() => expect(screen.getByText("نتائج المحادثة المحفوظة")).toBeInTheDocument());
+    expect(mockedSendChatTurn).toHaveBeenCalledTimes(1);
+
     await user.click(screen.getByRole("tab", { name: arDict.workspace.searchModeLabel }));
 
     const queryInput = screen.getByLabelText(arDict.workspace.composer.searchLabel);
+    expect(queryInput).toHaveAttribute("dir", "auto");
     const minRatingSelect = screen.getByLabelText(arDict.workspace.composer.minRatingLabel);
     const accessoriesCheckbox = screen.getByLabelText(
       arDict.workspace.composer.includeAccessoriesLabel,
@@ -347,24 +370,49 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
         expect.any(AbortSignal),
       );
     });
-    expect(mockedSendChatTurn).not.toHaveBeenCalled();
+    expect(mockedSendChatTurn).toHaveBeenCalledTimes(1);
 
     expect(screen.getByText("Philips Essential Airfryer XL")).toBeInTheDocument();
     expect(screen.getByText("Ninja Air Fryer AF100")).toBeInTheDocument();
     expect(screen.getByText(arDict.workspace.telemetry.cacheHit)).toBeInTheDocument();
     expect(screen.getByText("req-search-airfryer")).toBeInTheDocument();
 
-    // Switching back to Chat mode keeps the unified comparison results intact
+    const comparisonPanel = document.getElementById("comparison-panel")!;
+    const telemetrySection = within(comparisonPanel).getByRole("region", {
+      name: arDict.workspace.telemetry.title,
+    });
+    const llmCallsDt = within(telemetrySection).getByText(
+      `${arDict.workspace.telemetry.llmCalls}:`,
+    );
+    expect(llmCallsDt.parentElement).not.toBeNull();
+    expect(within(llmCallsDt.parentElement!).getByText("0")).toBeInTheDocument();
+
+    // Switching back to Chat mode keeps both the unified comparison results and existing chat thread intact
     await user.click(screen.getByRole("tab", { name: arDict.workspace.chatModeLabel }));
     expect(screen.getByText("Philips Essential Airfryer XL")).toBeInTheDocument();
+    expect(screen.getByText("سماعة أنكر")).toBeInTheDocument();
+    expect(screen.getByText("نتائج المحادثة المحفوظة")).toBeInTheDocument();
   });
 
-  it("Compare Saved Offers button appears only with >= 2 offers and dispatches comparison chat turn cleanly", async () => {
+  it("Compare Saved Offers requires an active Chat sessionId with >= 2 offers and dispatches comparison chat turn cleanly", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
 
     const singleOffer = [makeOffer(1, "single-1", "Single Earbud Offer", "1500.00")];
     const twoOffers = makeTop3Offers("EG").slice(0, 2);
+
+    mockedSearchOffers.mockResolvedValueOnce(
+      makeSearchResponse({
+        ranking_result: {
+          ranked_offers: twoOffers,
+          total_candidates: 2,
+          filtered_accessories_count: 0,
+          filtered_outliers_count: 0,
+          degraded_fewer_than_k: true,
+        },
+        request_id: "req-search-no-session",
+      }),
+    );
 
     mockedSendChatTurn
       .mockResolvedValueOnce(
@@ -423,7 +471,17 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
       screen.queryByRole("button", { name: arDict.workspace.composer.compareSavedButton }),
     ).not.toBeInTheDocument();
 
-    // 1 offer -> still absent
+    // 2 offers from Direct Search only (sessionId === null) -> still absent
+    await user.click(screen.getByRole("tab", { name: arDict.workspace.searchModeLabel }));
+    await user.type(screen.getByLabelText(arDict.workspace.composer.searchLabel), "anker");
+    await user.click(screen.getByRole("button", { name: arDict.workspace.composer.searchButton }));
+    await waitFor(() => expect(screen.getByText("req-search-no-session")).toBeInTheDocument());
+    await user.click(screen.getByRole("tab", { name: arDict.workspace.chatModeLabel }));
+    expect(
+      screen.queryByRole("button", { name: arDict.workspace.composer.compareSavedButton }),
+    ).not.toBeInTheDocument();
+
+    // 1 offer in Chat -> still absent
     const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
     await user.type(composer, "سماعة واحدة");
     await user.click(screen.getByRole("button", { name: arDict.workspace.composer.sendButton }));
@@ -432,7 +490,7 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
       screen.queryByRole("button", { name: arDict.workspace.composer.compareSavedButton }),
     ).not.toBeInTheDocument();
 
-    // 2 offers -> button appears
+    // 2 offers with active Chat sessionId -> button appears
     await user.type(composer, "سماعتين أنكر");
     await user.click(screen.getByRole("button", { name: arDict.workspace.composer.sendButton }));
     await waitFor(() =>
@@ -587,15 +645,28 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     expect(mockedSearchOffers).not.toHaveBeenCalled();
   });
 
-  it("in-flight guard blocks duplicate submits and ignores stale responses after market switch or New Chat", async () => {
+  it("in-flight guard blocks duplicate submits and aborts/ignores stale Chat & Direct Search responses on market switch or New Chat", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
 
-    let resolveDeferred!: (value: ChatResponse) => void;
-    const deferredPromise = new Promise<ChatResponse>((resolve) => {
-      resolveDeferred = resolve;
+    let capturedChatSignal: AbortSignal | undefined;
+    let rejectDeferred!: (err: unknown) => void;
+    mockedSendChatTurn.mockImplementationOnce((_payload, signal) => {
+      capturedChatSignal = signal;
+      return new Promise<ChatResponse>((_resolve, reject) => {
+        rejectDeferred = reject;
+        signal?.addEventListener("abort", () => {
+          reject(
+            new ApiClientError({
+              status: 0,
+              errorCode: "network_error",
+              message: "Aborted",
+              retriable: true,
+            }),
+          );
+        });
+      });
     });
-    mockedSendChatTurn.mockReturnValueOnce(deferredPromise);
 
     renderWorkspaceWithShell();
 
@@ -607,42 +678,48 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
 
     expect(mockedSendChatTurn).toHaveBeenCalledTimes(1);
     expect(screen.getByText(arDict.workspace.loadingResponse)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: arDict.workspace.composer.sendingButton })).toBeDisabled();
 
     // Repeated Enter / disabled Send clicks must not trigger a second call
     await user.type(composer, "{Enter}");
     expect(mockedSendChatTurn).toHaveBeenCalledTimes(1);
+    expect(capturedChatSignal?.aborted).toBe(false);
 
-    // Switch country to AE while EG request is still in-flight
+    // Switch country to AE while EG request is still in-flight -> aborts signal immediately
     await user.click(screen.getByRole("radio", { name: /الإمارات/ }));
+    expect(capturedChatSignal?.aborted).toBe(true);
 
-    // Resolve stale EG response after market switch -> AE must remain clean
-    resolveDeferred(
-      makeChatResponse({
-        session_id: "sess-stale-eg",
-        reply: "عرض مصر المتأخر",
-        top_offers: [makeOffer(1, "stale-eg", "Stale EG Product", "999.00")],
-      }),
-    );
-
+    // Settling the aborted EG promise must leave AE and EG clean with zero error banners
+    rejectDeferred(new Error("late settle"));
     await waitFor(() => {
       expect(screen.queryByText(arDict.workspace.loadingResponse)).not.toBeInTheDocument();
     });
-    expect(screen.queryByText("عرض مصر المتأخر")).not.toBeInTheDocument();
-    expect(screen.queryByText("Stale EG Product")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(arDict.workspace.emptyChatTitle)).toBeInTheDocument();
 
-    // Verify New Chat also cancels/ignores stale in-flight turns
+    // Switch back to EG to confirm EG also stayed completely clean
+    await user.click(screen.getByRole("radio", { name: /مصر/ }));
+    expect(screen.getByText(arDict.workspace.emptyChatTitle)).toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Switch to AE and verify New Chat also aborts/ignores stale in-flight chat turns
+    await user.click(screen.getByRole("radio", { name: /الإمارات/ }));
+    let capturedSecondSignal: AbortSignal | undefined;
     let resolveSecond!: (value: ChatResponse) => void;
-    mockedSendChatTurn.mockReturnValueOnce(
-      new Promise<ChatResponse>((resolve) => {
+    mockedSendChatTurn.mockImplementationOnce((_payload, signal) => {
+      capturedSecondSignal = signal;
+      return new Promise<ChatResponse>((resolve) => {
         resolveSecond = resolve;
-      }),
-    );
+      });
+    });
 
     await user.type(screen.getByLabelText(arDict.workspace.composer.chatLabel), "آيفون 15");
     await user.click(screen.getByRole("button", { name: arDict.workspace.composer.sendButton }));
     expect(mockedSendChatTurn).toHaveBeenCalledTimes(2);
 
     await user.click(screen.getByRole("button", { name: arDict.shell.newChatAria }));
+    expect(capturedSecondSignal?.aborted).toBe(true);
     resolveSecond(
       makeChatResponse({
         session_id: "sess-stale-ae",
@@ -654,9 +731,53 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
       expect(screen.queryByText(arDict.workspace.loadingResponse)).not.toBeInTheDocument();
     });
     expect(screen.queryByText("عرض متأخر بعد محادثة جديدة")).not.toBeInTheDocument();
+
+    // Equivalent in-flight duplicate-submit & race-cancellation check for Direct Search (`searchOffers`)
+    let capturedSearchSignal: AbortSignal | undefined;
+    let resolveSearch!: (value: SearchResponse) => void;
+    mockedSearchOffers.mockImplementationOnce((_payload, signal) => {
+      capturedSearchSignal = signal;
+      return new Promise<SearchResponse>((resolve) => {
+        resolveSearch = resolve;
+      });
+    });
+
+    await user.click(screen.getByRole("tab", { name: arDict.workspace.searchModeLabel }));
+    const searchInput = screen.getByLabelText(arDict.workspace.composer.searchLabel);
+    await user.type(searchInput, "air fryer");
+    await user.click(screen.getByRole("button", { name: arDict.workspace.composer.searchButton }));
+
+    expect(mockedSearchOffers).toHaveBeenCalledTimes(1);
+    const searchSendingBtn = screen.getByRole("button", {
+      name: arDict.workspace.composer.sendingButton,
+    });
+    expect(searchSendingBtn).toBeDisabled();
+    fireEvent.submit(searchSendingBtn.closest("form")!);
+    expect(mockedSearchOffers).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("radio", { name: /السعودية/ }));
+    expect(capturedSearchSignal?.aborted).toBe(true);
+    resolveSearch(
+      makeSearchResponse({
+        ranking_result: {
+          ranked_offers: [makeOffer(1, "stale-sa", "Stale Search Product", "500.00", "noon", "AE")],
+          total_candidates: 1,
+          filtered_accessories_count: 0,
+          filtered_outliers_count: 0,
+          degraded_fewer_than_k: true,
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Stale Search Product")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(arDict.workspace.comparison.panelEmptyTitle)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /الإمارات/ }));
+    expect(screen.queryByText("Stale Search Product")).not.toBeInTheDocument();
   });
 
-  it("handles clarify, off_topic, refused without PII persistence, and degraded chat states", async () => {
+  it("handles clarify, off_topic, refused (clearing composer without PII persistence), degraded + Retry, and generic_error", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
 
@@ -721,6 +842,24 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
             latency_ms: 85,
           },
         }),
+      )
+      .mockResolvedValueOnce(
+        makeChatResponse({
+          session_id: "sess-status",
+          status: "ok",
+          action: "search",
+          reply: "تم استعادة عروض اللابتوب.",
+          top_offers: [makeOffer(1, "laptop-1", "Lenovo IdeaPad Laptop", "18500.00", "noon", "EG")],
+        }),
+      )
+      .mockRejectedValueOnce(
+        new ApiClientError({
+          status: 422,
+          errorCode: "validation_error",
+          message: "Unexpected validation failure from API.",
+          retriable: false,
+          requestId: "req-422-gen",
+        }),
       );
 
     renderWorkspaceWithShell();
@@ -751,12 +890,13 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     );
     expect(screen.getByText("Anker Soundcore Liberty 4 NC")).toBeInTheDocument();
 
-    // 4. Refused PII input: preserves prior offers, shows refused alert, and never echoes/stores PII
+    // 4. Refused PII input: clears composer, preserves prior offers, shows refused alert, and never echoes/stores PII
     await user.type(composer, "4111111111111111");
     await user.click(sendButton);
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(arDict.workspace.banners.refusedTitle),
     );
+    expect(composer).toHaveValue("");
     expect(screen.getByText("Anker Soundcore Liberty 4 NC")).toBeInTheDocument();
     expect(screen.queryByText(/4111111111111111/)).not.toBeInTheDocument();
 
@@ -764,12 +904,28 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     expect(persistedRaw).not.toContain("4111111111111111");
     expect(persistedRaw).toContain(arDict.workspace.banners.redactedUserMessage);
 
-    // 5. Degraded state renders degraded alert cleanly
+    // 5. Degraded state renders degraded alert + Retry button -> Retry recovers cleanly
     await user.type(composer, "لابتوب");
     await user.click(sendButton);
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(arDict.workspace.banners.degradedTitle),
     );
+    await user.click(screen.getByRole("button", { name: arDict.workspace.banners.retryButton }));
+    await waitFor(() =>
+      expect(screen.getByText("Lenovo IdeaPad Laptop")).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // 6. generic_error renders non-retriable alert cleanly without Retry button
+    await user.type(composer, "استعلام خاطئ");
+    await user.click(sendButton);
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Unexpected validation failure from API.");
+    });
+    expect(
+      screen.queryByRole("button", { name: arDict.workspace.banners.retryButton }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders partial < 3 offers without fake padding and clears stale offers on 0 results", async () => {
@@ -829,7 +985,7 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     expect(screen.queryByText("Anker Soundcore Liberty 4 NC")).not.toBeInTheDocument();
   });
 
-  it("displays 429 Retry-After and 503 outage banners and recovers via Retry action", async () => {
+  it("displays 429 Retry-After and 503 outage banners in Chat & Direct Search and recovers via Retry action", async () => {
     const user = userEvent.setup();
     const arDict = getDictionary("ar");
 
@@ -861,6 +1017,29 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
         }),
       );
 
+    mockedSearchOffers
+      .mockRejectedValueOnce(
+        new ApiClientError({
+          status: 503,
+          errorCode: "backend_unreachable",
+          message: "Backend service unavailable.",
+          retriable: true,
+          requestId: "req-search-503",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSearchResponse({
+          ranking_result: {
+            ranked_offers: [makeOffer(1, "search-rec-1", "Recovered Direct Offer", "1599.00", "noon", "EG")],
+            total_candidates: 1,
+            filtered_accessories_count: 0,
+            filtered_outliers_count: 0,
+            degraded_fewer_than_k: true,
+          },
+          request_id: "req-search-rec",
+        }),
+      );
+
     renderWorkspaceWithShell();
 
     const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
@@ -888,5 +1067,61 @@ describe("ShoppingWorkspace & HomePage (integration & edge)", () => {
     });
     expect(screen.getByText("Anker Soundcore Liberty 4 NC")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Switch to Direct Search -> 503 -> Retry -> 200 recovery
+    await user.click(screen.getByRole("tab", { name: arDict.workspace.searchModeLabel }));
+    await user.type(screen.getByLabelText(arDict.workspace.composer.searchLabel), "air fryer");
+    await user.click(screen.getByRole("button", { name: arDict.workspace.composer.searchButton }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        arDict.workspace.banners.networkErrorTitle,
+      );
+    });
+    await user.click(screen.getByRole("button", { name: arDict.workspace.banners.retryButton }));
+    await waitFor(() => {
+      expect(screen.getByText("Recovered Direct Offer")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("handles mixed Arabic/English query with dir=auto bidi isolation across ChatThread, MessageComposer, and OfferCard", async () => {
+    const user = userEvent.setup();
+    const arDict = getDictionary("ar");
+    const mixedQuery = "أفضل سماعة Anker Soundcore تحت 3500 EGP";
+
+    mockedSendChatTurn.mockResolvedValueOnce(
+      makeChatResponse({
+        session_id: "sess-bidi",
+        reply: "تم العثور على Anker Soundcore R50i بسعر ممتاز.",
+        top_offers: [
+          makeOffer(1, "bidi-1", "سماعة أنكر Soundcore Liberty 4 NC", "3299.00", "noon", "EG"),
+        ],
+      }),
+    );
+
+    renderWorkspaceWithShell();
+
+    const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
+    expect(composer).toHaveAttribute("dir", "auto");
+    await user.type(composer, `${mixedQuery}{Enter}`);
+
+    await waitFor(() => {
+      expect(mockedSendChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ message: mixedQuery }),
+        expect.any(AbortSignal),
+      );
+    });
+
+    expect(screen.getByText(mixedQuery)).toHaveAttribute("dir", "auto");
+    expect(screen.getByText("تم العثور على Anker Soundcore R50i بسعر ممتاز.")).toHaveAttribute(
+      "dir",
+      "auto",
+    );
+    const mixedCardHeading = screen.getByRole("heading", {
+      level: 3,
+      name: "سماعة أنكر Soundcore Liberty 4 NC",
+    });
+    expect(mixedCardHeading).toHaveAttribute("dir", "auto");
   });
 });

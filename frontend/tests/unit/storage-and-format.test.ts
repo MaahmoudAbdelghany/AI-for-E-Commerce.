@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ActiveComparisonState,
@@ -47,10 +47,6 @@ const ALL_TURN_ACTIONS: TurnAction[] = ["search", "compare", "clarify", "off_top
 const ALL_TURN_STATUSES: TurnStatus[] = ["ok", "clarify", "off_topic", "refused", "degraded"];
 
 describe("format, i18n, and storage (unit & edge)", () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-  });
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -94,6 +90,9 @@ describe("format, i18n, and storage (unit & edge)", () => {
         expect(prompt.labelEn.length).toBeGreaterThan(0);
         expect(prompt.queryAr.length).toBeGreaterThan(0);
         expect(prompt.queryEn.length).toBeGreaterThan(0);
+        // Starter prompts must stay search-oriented so backend rule fallback classifies them as SEARCH, not COMPARE.
+        expect(prompt.queryEn).not.toMatch(/\b(?:compare|comparison|vs|versus)\b/i);
+        expect(prompt.queryAr).not.toMatch(/(?:قارن|مقارن[ةه])/);
       }
     }
 
@@ -244,6 +243,11 @@ describe("format, i18n, and storage (unit & edge)", () => {
     expect(formatValueScore(88.54)).toBe("88.5 / 100");
     expect(formatLatencyMs(42.3, "en")).toBe("42 ms");
     expect(formatLatencyMs(42.3, "ar")).toBe("42 مللي ثانية");
+
+    expect(formatExactPrice("not-a-price", "EGP", "en")).toBe("not-a-price EGP");
+    expect(formatExactPrice("0003299.50", "EGP", "en")).toBe("3,299.50 EGP");
+    expect(formatExactPrice("   -42.10  ", "AED", "en")).toBe("-42.10 AED");
+    expect(formatExactPrice("1500", "SAR", "ar")).toBe("1,500 ريال سعودي");
   });
 
   it("storage recovers cleanly from corrupted localStorage JSON and invalid schemas", () => {
@@ -262,14 +266,111 @@ describe("format, i18n, and storage (unit & edge)", () => {
     );
     window.localStorage.setItem(
       MARKET_SESSIONS_STORAGE_KEY,
-      JSON.stringify({ EG: { sessionId: "", messages: ["bad"], activeComparison: { bad: true } } }),
+      JSON.stringify({
+        EG: {
+          sessionId: "",
+          messages: [
+            "bad",
+            {
+              id: "m-valid-with-bad-telemetry",
+              role: "assistant",
+              content: "ok reply",
+              createdAtIso: "2026-11-16T20:00:00Z",
+              telemetry: { llm_calls: "not-a-number" },
+            },
+          ],
+          activeComparison: {
+            mode: "chat",
+            queryLabel: "Anker",
+            rankedOffers: [null],
+            rankingResult: null,
+            sourceMode: "seed",
+            cacheHit: false,
+            llmCalls: 1,
+            latencyMs: 10,
+            requestId: "req-1",
+            degradedReason: null,
+            status: "ok",
+            updatedAtIso: "2026-11-16T20:00:00Z",
+          },
+        },
+        SA: {
+          sessionId: "sess-sa-nested",
+          messages: [],
+          activeComparison: {
+            mode: "search",
+            queryLabel: "air fryer",
+            rankedOffers: [
+              {
+                rank: 1,
+                offer: {
+                  offer_id: "sa-1",
+                  title: "Valid Offer",
+                  price: "299.00",
+                  currency: "SAR",
+                  store: "noon",
+                  country: "SA",
+                  url: "https://www.noon.com/saudi-ar/p/1",
+                  rating: 4.5,
+                  review_count: 10,
+                  image_url: null,
+                  in_stock: true,
+                },
+                value_score: 85,
+                price_norm: 0.9,
+                bayesian_rating: 4.4,
+                match_reasons: ["best_overall_value"],
+              },
+            ],
+            rankingResult: { total_candidates: "corrupt" },
+            sourceMode: "seed",
+            cacheHit: false,
+            llmCalls: 0,
+            latencyMs: 8,
+            requestId: "req-sa-1",
+            degradedReason: null,
+            status: "search_ok",
+            updatedAtIso: "2026-11-16T20:00:00Z",
+          },
+        },
+        AE: {
+          sessionId: null,
+          messages: [],
+          activeComparison: {
+            mode: "chat",
+            queryLabel: "broken offer",
+            rankedOffers: [{ rank: 1, offer: { offer_id: "x", store: "ebay" }, value_score: 50, price_norm: 0.5, bayesian_rating: 4, match_reasons: [] }],
+            rankingResult: null,
+            sourceMode: null,
+            cacheHit: false,
+            llmCalls: 1,
+            latencyMs: 12,
+            requestId: "req-ae-1",
+            degradedReason: null,
+            status: "ok",
+            updatedAtIso: "2026-11-16T20:00:00Z",
+          },
+        },
+      }),
     );
 
     expect(loadPreferences()).toEqual(DEFAULT_USER_PREFERENCES);
-    expect(loadMarketSessions().EG).toEqual({
+    const reloaded = loadMarketSessions();
+    expect(reloaded.EG).toEqual({
       sessionId: null,
-      messages: [],
+      messages: [
+        {
+          id: "m-valid-with-bad-telemetry",
+          role: "assistant",
+          content: "ok reply",
+          createdAtIso: "2026-11-16T20:00:00Z",
+        },
+      ],
       activeComparison: null,
     });
+    expect(reloaded.SA.sessionId).toBe("sess-sa-nested");
+    expect(reloaded.SA.activeComparison?.rankedOffers).toHaveLength(1);
+    expect(reloaded.SA.activeComparison?.rankingResult).toBeNull();
+    expect(reloaded.AE.activeComparison).toBeNull();
   });
 });

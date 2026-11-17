@@ -1,11 +1,15 @@
+import { isIP } from "node:net";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ErrorResponse } from "@/lib/contracts";
 
 const DEFAULT_BACKEND_API_URL = "http://127.0.0.1:8000";
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-const V1_TIMEOUT_MS = 12_000;
+const DEFAULT_V1_TIMEOUT_MS = 12_000;
+const MIN_PROXY_TIMEOUT_MS = 1_000;
+const MAX_PROXY_TIMEOUT_MS = 60_000;
 const HEALTH_TIMEOUT_MS = 5_000;
+const MAX_POST_BODY_BYTES = 65_536;
 
 interface AllowedRouteSpec {
   method: "GET" | "POST";
@@ -24,6 +28,18 @@ export function resolveBackendApiUrl(): string {
   return candidate.replace(/\/+$/, "");
 }
 
+export function resolveV1TimeoutMs(): number {
+  const raw = process.env.BACKEND_PROXY_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_V1_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_V1_TIMEOUT_MS;
+  }
+  return Math.min(MAX_PROXY_TIMEOUT_MS, Math.max(MIN_PROXY_TIMEOUT_MS, Math.trunc(parsed)));
+}
+
 function resolveRequestId(request: NextRequest): string {
   const incoming = request.headers.get("x-request-id")?.trim();
   if (incoming && REQUEST_ID_RE.test(incoming)) {
@@ -37,9 +53,11 @@ function jsonErrorResponse(
   error: ErrorResponse,
   extraHeaders?: Record<string, string>,
 ): NextResponse {
-  return NextResponse.json(error, {
+  return new NextResponse(JSON.stringify(error), {
     status,
     headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
       "X-Request-ID": error.request_id,
       "Cache-Control": "no-store",
       ...(extraHeaders ?? {}),
@@ -53,6 +71,119 @@ function sanitizeHeaderValue(value: string | null): string | null {
   }
   const cleaned = value.replace(/[\r\n\u0000-\u001F\u007F]/g, "").trim();
   return cleaned.length > 0 ? cleaned : null;
+}
+
+function sanitizeTrustedForwardedFor(request: NextRequest): string | null {
+  if (process.env.TRUST_PROXY_HEADERS !== "true") {
+    return null;
+  }
+  const cleaned = sanitizeHeaderValue(request.headers.get("x-forwarded-for"));
+  if (!cleaned) {
+    return null;
+  }
+  const hops = cleaned
+    .split(",")
+    .map((hop) => hop.trim())
+    .filter((hop) => hop.length > 0);
+  if (hops.length === 0 || !hops.every((hop) => isIP(hop) !== 0)) {
+    return null;
+  }
+  return hops.join(", ");
+}
+
+function isJsonContentType(rawContentType: string | null): boolean {
+  if (!rawContentType) {
+    return false;
+  }
+  const mediaType = rawContentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return mediaType === "application/json" || (mediaType.includes("/") && mediaType.endsWith("+json"));
+}
+
+function createUpstreamAbortSignal(
+  timeoutMs: number,
+  requestSignal?: AbortSignal,
+): { signal: AbortSignal; cleanup: () => void } {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!requestSignal) {
+    return { signal: timeoutSignal, cleanup: () => {} };
+  }
+  if (typeof AbortSignal.any === "function") {
+    try {
+      return { signal: AbortSignal.any([timeoutSignal, requestSignal]), cleanup: () => {} };
+    } catch {
+      // Fallback below if cross-realm AbortSignal instances cannot be combined via AbortSignal.any.
+    }
+  }
+  const controller = new AbortController();
+  if (requestSignal.aborted) {
+    controller.abort(requestSignal.reason);
+    return { signal: controller.signal, cleanup: () => {} };
+  }
+  if (timeoutSignal.aborted) {
+    controller.abort(timeoutSignal.reason);
+    return { signal: controller.signal, cleanup: () => {} };
+  }
+  const onRequestAbort = () => controller.abort(requestSignal.reason);
+  const onTimeoutAbort = () => controller.abort(timeoutSignal.reason);
+  requestSignal.addEventListener("abort", onRequestAbort, { once: true });
+  timeoutSignal.addEventListener("abort", onTimeoutAbort, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      requestSignal.removeEventListener("abort", onRequestAbort);
+      timeoutSignal.removeEventListener("abort", onTimeoutAbort);
+    },
+  };
+}
+
+async function readBoundedPostBody(
+  request: NextRequest,
+): Promise<{ ok: true; body: string } | { ok: false }> {
+  const rawLength = request.headers.get("content-length")?.trim();
+  if (rawLength && /^\d+$/.test(rawLength)) {
+    const declaredBytes = Number(rawLength);
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_POST_BODY_BYTES) {
+      return { ok: false };
+    }
+  }
+
+  if (request.body) {
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value) {
+          totalBytes += value.byteLength;
+          if (totalBytes > MAX_POST_BODY_BYTES) {
+            await reader.cancel().catch(() => {});
+            return { ok: false };
+          }
+          chunks.push(value);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { ok: true, body: new TextDecoder().decode(merged) };
+  }
+
+  const text = await request.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_POST_BODY_BYTES) {
+    return { ok: false };
+  }
+  return { ok: true, body: text };
 }
 
 function hasPathTraversalOrBadEncoding(request: NextRequest, segments: string[]): boolean {
@@ -109,7 +240,7 @@ async function forwardToBackend(
   forwardHeaders.set("Accept", sanitizeHeaderValue(request.headers.get("accept")) ?? "application/json");
   forwardHeaders.set("X-Request-ID", requestId);
 
-  const forwardedFor = sanitizeHeaderValue(request.headers.get("x-forwarded-for"));
+  const forwardedFor = sanitizeTrustedForwardedFor(request);
   if (forwardedFor) {
     forwardHeaders.set("X-Forwarded-For", forwardedFor);
   }
@@ -121,9 +252,20 @@ async function forwardToBackend(
       "Content-Type",
       sanitizeHeaderValue(request.headers.get("content-type")) ?? "application/json",
     );
-    body = await request.text();
+    const bounded = await readBoundedPostBody(request);
+    if (!bounded.ok) {
+      return jsonErrorResponse(413, {
+        error_code: "payload_too_large",
+        message: "Request body exceeds the maximum allowed size of 64 KiB.",
+        retriable: false,
+        request_id: requestId,
+        details: null,
+      });
+    }
+    body = bounded.body;
   }
 
+  const { signal, cleanup } = createUpstreamAbortSignal(timeoutMs, request.signal);
   let upstreamResponse: Response;
   try {
     upstreamResponse = await fetch(targetUrl, {
@@ -131,7 +273,8 @@ async function forwardToBackend(
       headers: forwardHeaders,
       body,
       cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error",
+      signal,
     });
   } catch {
     return jsonErrorResponse(503, {
@@ -141,18 +284,44 @@ async function forwardToBackend(
       request_id: requestId,
       details: null,
     });
+  } finally {
+    cleanup();
   }
 
   const responseText = await upstreamResponse.text();
+  const rawUpstreamRequestId = sanitizeHeaderValue(upstreamResponse.headers.get("x-request-id"));
+  const effectiveRequestId =
+    rawUpstreamRequestId && REQUEST_ID_RE.test(rawUpstreamRequestId)
+      ? rawUpstreamRequestId
+      : requestId;
+
+  let isValidJson = false;
+  if (isJsonContentType(upstreamResponse.headers.get("content-type"))) {
+    try {
+      JSON.parse(responseText);
+      isValidJson = true;
+    } catch {
+      isValidJson = false;
+    }
+  }
+
+  if (!isValidJson) {
+    const isUpstreamServerError = upstreamResponse.status >= 500;
+    return jsonErrorResponse(isUpstreamServerError ? upstreamResponse.status : 502, {
+      error_code: isUpstreamServerError ? "backend_unreachable" : "upstream_invalid_response",
+      message: isUpstreamServerError
+        ? "Backend service is temporarily unavailable."
+        : "Backend service returned an invalid response.",
+      retriable: true,
+      request_id: effectiveRequestId,
+      details: null,
+    });
+  }
+
   const responseHeaders = new Headers();
-  responseHeaders.set(
-    "Content-Type",
-    upstreamResponse.headers.get("content-type") ?? "application/json",
-  );
-  responseHeaders.set(
-    "X-Request-ID",
-    sanitizeHeaderValue(upstreamResponse.headers.get("x-request-id")) ?? requestId,
-  );
+  responseHeaders.set("Content-Type", "application/json; charset=utf-8");
+  responseHeaders.set("X-Content-Type-Options", "nosniff");
+  responseHeaders.set("X-Request-ID", effectiveRequestId);
   responseHeaders.set("Cache-Control", "no-store");
 
   const retryAfter = sanitizeHeaderValue(upstreamResponse.headers.get("retry-after"));
@@ -214,7 +383,7 @@ export async function proxyV1Request(
     );
   }
 
-  return forwardToBackend(request, routeSpec.upstreamPath, V1_TIMEOUT_MS, requestId);
+  return forwardToBackend(request, routeSpec.upstreamPath, resolveV1TimeoutMs(), requestId);
 }
 
 export async function proxyHealthRequest(request: NextRequest): Promise<NextResponse> {

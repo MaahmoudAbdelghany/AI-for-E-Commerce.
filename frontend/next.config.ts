@@ -29,6 +29,19 @@ function canonicalizeCommonjsResult(result: unknown, searchRoot: string): unknow
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        ],
+      },
+    ];
+  },
   webpack(config, { isServer }) {
     const rawContext = typeof config.context === "string" ? config.context : process.cwd();
     const realContext = fs.realpathSync.native(rawContext);

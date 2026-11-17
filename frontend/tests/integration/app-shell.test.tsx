@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/shell/AppShell";
 import { ShopSessionProvider, useShopSession } from "@/context/ShopSessionContext";
@@ -114,12 +114,6 @@ function mockHealthyEndpoints() {
 }
 
 describe("AppShell & ShopSessionContext (integration)", () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-    document.documentElement.lang = "ar";
-    document.documentElement.dir = "rtl";
-  });
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -261,5 +255,77 @@ describe("AppShell & ShopSessionContext (integration)", () => {
     await user.click(screen.getByRole("button", { name: "مسح" }));
     expect(budgetInput).toHaveAttribute("aria-invalid", "false");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("HealthBadge displays degraded status and guards overlapping refreshHealth responses out of order", async () => {
+    const user = userEvent.setup();
+    let healthCall = 0;
+    let resolveSlowRefresh!: (res: Response) => void;
+    let slowSignal: AbortSignal | undefined;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/api/v1/markets")) {
+          return new Response(JSON.stringify(MOCK_MARKETS), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/health") || url.endsWith("/health")) {
+          healthCall += 1;
+          if (healthCall === 1) {
+            return new Response(JSON.stringify({ ...MOCK_HEALTH, status: "degraded" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (healthCall === 2) {
+            slowSignal = init?.signal ?? undefined;
+            return new Promise<Response>((resolve) => {
+              resolveSlowRefresh = resolve;
+            });
+          }
+          return new Response(JSON.stringify({ ...MOCK_HEALTH, status: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("Not Found", { status: 404 });
+      }),
+    );
+
+    render(
+      <ShopSessionProvider>
+        <AppShell>
+          <SessionProbe />
+        </AppShell>
+      </ShopSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("تشغيل مقلّص");
+    });
+
+    const refreshBtn = screen.getByRole("button", { name: "تحديث حالة الخدمة" });
+    await user.click(refreshBtn);
+    await user.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("متصل");
+    });
+    expect(slowSignal?.aborted).toBe(true);
+
+    // Even if the superseded request settled with degraded, latest "ok" must hold.
+    resolveSlowRefresh(
+      new Response(JSON.stringify({ ...MOCK_HEALTH, status: "degraded" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("متصل");
+    });
   });
 });

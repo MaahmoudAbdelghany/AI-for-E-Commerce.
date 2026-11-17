@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import { ChatThread } from "@/components/workspace/ChatThread";
 import { OfferCard } from "@/components/workspace/OfferCard";
 import { ProductComparisonGrid } from "@/components/workspace/ProductComparisonGrid";
 import { StatusBanner } from "@/components/workspace/StatusBanner";
@@ -77,6 +78,13 @@ describe("OfferCard, ProductComparisonGrid, TelemetryStrip, and StatusBanner (un
     const { rerender } = render(
       <OfferCard rankedOffer={offerWithAllReasons} language="ar" t={arDict} />,
     );
+
+    const mixedHeading = screen.getByRole("heading", {
+      level: 3,
+      name: "سماعة أنكر Soundcore R50i",
+    });
+    expect(mixedHeading).toBeInTheDocument();
+    expect(mixedHeading).toHaveAttribute("dir", "auto");
 
     expect(screen.getByText("#2")).toBeInTheDocument();
     expect(screen.getByText("أمازون")).toBeInTheDocument();
@@ -435,5 +443,39 @@ describe("OfferCard, ProductComparisonGrid, TelemetryStrip, and StatusBanner (un
 
     await user.click(screen.getByRole("button", { name: enDict.workspace.banners.retryButton }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("ChatThread isolates mixed Arabic/English user and assistant bubbles with dir=auto", () => {
+    const arDict = getDictionary("ar");
+    render(
+      <ChatThread
+        messages={[
+          {
+            id: "u-bidi",
+            role: "user",
+            content: "أفضل سماعة Anker Soundcore تحت 3500 EGP",
+            createdAtIso: "2026-11-16T20:00:00Z",
+          },
+          {
+            id: "a-bidi",
+            role: "assistant",
+            content: "أفضل عرض هو Anker Soundcore R50i بسعر 1,199.00 جنيه مصري.",
+            createdAtIso: "2026-11-16T20:00:01Z",
+            action: "search",
+            status: "ok",
+            offerCount: 1,
+          },
+        ]}
+        isLoading={false}
+        t={arDict}
+      />,
+    );
+
+    const userBubbleText = screen.getByText("أفضل سماعة Anker Soundcore تحت 3500 EGP");
+    const assistantBubbleText = screen.getByText(
+      "أفضل عرض هو Anker Soundcore R50i بسعر 1,199.00 جنيه مصري.",
+    );
+    expect(userBubbleText).toHaveAttribute("dir", "auto");
+    expect(assistantBubbleText).toHaveAttribute("dir", "auto");
   });
 });

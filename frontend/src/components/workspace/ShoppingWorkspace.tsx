@@ -123,7 +123,7 @@ export function ShoppingWorkspace() {
     activeSessionRef.current = activeMarketSession;
   }, [activeMarketSession]);
 
-  // Cancel and ignore in-flight responses on market switch or New Chat reset.
+  // Cancel and ignore in-flight responses on market switch, New Chat reset, or unmount.
   useEffect(() => {
     requestEpochRef.current += 1;
     inFlightRef.current = false;
@@ -134,6 +134,13 @@ export function ShoppingWorkspace() {
     setIsSubmitting(false);
     setActiveError(null);
     setComposerError(null);
+
+    return () => {
+      if (inFlightControllerRef.current) {
+        inFlightControllerRef.current.abort();
+        inFlightControllerRef.current = null;
+      }
+    };
   }, [country, sessionResetNonce]);
 
   // Clear per-market turn banner when the active market session is reset via New Chat.
@@ -529,7 +536,7 @@ export function ShoppingWorkspace() {
 
   const activeComparison = activeMarketSession.activeComparison;
   const activeOffers = activeComparison?.rankedOffers ?? [];
-  const canCompareSaved = activeOffers.length >= 2;
+  const canCompareSaved = activeMarketSession.sessionId !== null && activeOffers.length >= 2;
   const activeTurnBanner = turnBannerByCountry[country];
 
   const showPartialBanner =

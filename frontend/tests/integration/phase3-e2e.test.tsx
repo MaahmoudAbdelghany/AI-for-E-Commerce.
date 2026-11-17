@@ -341,9 +341,6 @@ describe("Phase 3 end-to-end integration (PI.1 — offline Route Handler round-t
 
   beforeEach(() => {
     process.env.BACKEND_API_URL = UPSTREAM_BASE;
-    window.localStorage.clear();
-    document.documentElement.lang = "ar";
-    document.documentElement.dir = "rtl";
   });
 
   afterEach(() => {
@@ -1008,5 +1005,58 @@ describe("Phase 3 end-to-end integration (PI.1 — offline Route Handler round-t
     await waitFor(() => {
       expect(screen.getByRole("status", { name: /حالة الخدمة/ })).toHaveTextContent("متصل");
     });
+  });
+
+  it("round-trips a mixed Arabic/English query through real Route Handlers with dir=auto bidi isolation", async () => {
+    const user = userEvent.setup();
+    const arDict = getDictionary("ar");
+    const mixedQuery = "أفضل سماعة Anker Soundcore تحت 3500 EGP";
+    const mixedReply = "إليك أفضل سماعة Anker Soundcore Liberty 4 NC في مصر.";
+
+    installFullStackRouteBridge(async (url, init) => {
+      if (url === `${UPSTREAM_BASE}/api/v1/markets`) {
+        return jsonResponse(MOCK_MARKETS);
+      }
+      if (url === `${UPSTREAM_BASE}/health`) {
+        return jsonResponse(MOCK_HEALTH);
+      }
+      if (url === `${UPSTREAM_BASE}/api/v1/chat`) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as ChatRequest;
+        expect(body.message).toBe(mixedQuery);
+        return jsonResponse(
+          makeChatResponse({
+            session_id: "sess-bidi-e2e",
+            reply: mixedReply,
+            top_offers: [
+              makeOffer(1, "eg-bidi-1", "سماعة أنكر Soundcore Liberty 4 NC", "3299.00", "noon", "EG"),
+            ],
+            request_id: "req-e2e-bidi",
+          }),
+          200,
+          { "X-Request-ID": "req-e2e-bidi" },
+        );
+      }
+      throw new Error(`Unexpected upstream path: ${url}`);
+    });
+
+    renderFullApp();
+
+    await waitFor(() => {
+      expect(screen.getByRole("status", { name: /حالة الخدمة/ })).toHaveTextContent("متصل");
+    });
+
+    const composer = screen.getByLabelText(arDict.workspace.composer.chatLabel);
+    expect(composer).toHaveAttribute("dir", "auto");
+    await user.type(composer, `${mixedQuery}{Enter}`);
+
+    await waitFor(() => {
+      expect(screen.getByText(mixedReply)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(mixedQuery)).toHaveAttribute("dir", "auto");
+    expect(screen.getByText(mixedReply)).toHaveAttribute("dir", "auto");
+    expect(
+      screen.getByRole("heading", { level: 3, name: "سماعة أنكر Soundcore Liberty 4 NC" }),
+    ).toHaveAttribute("dir", "auto");
   });
 });

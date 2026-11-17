@@ -31,7 +31,7 @@ export const STARTER_PROMPTS: Record<CountryCode, StarterPrompt[]> = {
       labelAr: "قلاية هوائية",
       labelEn: "Air fryer",
       queryAr: "أفضل قلاية هوائية عائلية في مصر من نون وأمازون",
-      queryEn: "Compare family air fryers in Egypt across Noon and Amazon",
+      queryEn: "Best family air fryers in Egypt across Noon and Amazon",
     },
     {
       id: "eg-iphone-15",
@@ -54,14 +54,14 @@ export const STARTER_PROMPTS: Record<CountryCode, StarterPrompt[]> = {
       labelAr: "قلاية هوائية",
       labelEn: "Air fryer",
       queryAr: "قلاية هوائية فيليبس أو نينجا في السعودية",
-      queryEn: "Compare Philips and Ninja air fryers in Saudi Arabia",
+      queryEn: "Best Philips and Ninja air fryers in Saudi Arabia",
     },
     {
       id: "sa-iphone-15",
       labelAr: "آيفون 15",
       labelEn: "iPhone 15",
-      queryAr: "مقارنة أسعار آيفون 15 في نون وأمازون السعودية",
-      queryEn: "Compare Apple iPhone 15 offers on Noon and Amazon SA",
+      queryAr: "أفضل أسعار آيفون 15 في نون وأمازون السعودية",
+      queryEn: "Best Apple iPhone 15 offers on Noon and Amazon SA",
     },
   ],
   AE: [

@@ -28,7 +28,7 @@ import type {
 import { validateBudgetInput } from "@/lib/format";
 import { getDictionary, type TranslationDictionary } from "@/lib/i18n";
 import {
-  clearMarketSession,
+  createEmptyMarketSession,
   createInitialMarketSessions,
   DEFAULT_USER_PREFERENCES,
   loadMarketSessions,
@@ -141,12 +141,15 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
   const [marketSessions, setMarketSessions] = useState<Record<CountryCode, MarketWorkspaceSession>>(
     () => createInitialMarketSessions(),
   );
+  const [sessionsHydrated, setSessionsHydrated] = useState<boolean>(false);
   const [sessionResetNonce, setSessionResetNonce] = useState<number>(0);
 
   const prefsMutatedBeforeHydrationRef = useRef(false);
   const countryRef = useRef<CountryCode>(country);
   const storeRef = useRef<StoreFilter>(store);
   const languageRef = useRef<UiLanguage>(language);
+  const healthRequestSeqRef = useRef<number>(0);
+  const healthAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     countryRef.current = country;
@@ -187,20 +190,48 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshHealth = useCallback(async (signal?: AbortSignal) => {
+    const requestSeq = healthRequestSeqRef.current + 1;
+    healthRequestSeqRef.current = requestSeq;
+    healthAbortControllerRef.current?.abort();
+
+    const controller = new AbortController();
+    healthAbortControllerRef.current = controller;
+
+    if (signal?.aborted) {
+      controller.abort(signal.reason);
+      return;
+    }
+
+    const onExternalAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onExternalAbort, { once: true });
+
     setHealthStatus("checking");
     try {
-      const response = await fetchHealth(signal);
-      if (signal?.aborted) {
+      const response = await fetchHealth(controller.signal);
+      if (
+        requestSeq !== healthRequestSeqRef.current ||
+        controller.signal.aborted ||
+        signal?.aborted
+      ) {
         return;
       }
       setHealth(response);
       setHealthStatus(response.status === "ok" ? "ok" : "degraded");
     } catch {
-      if (signal?.aborted) {
+      if (
+        requestSeq !== healthRequestSeqRef.current ||
+        controller.signal.aborted ||
+        signal?.aborted
+      ) {
         return;
       }
       setHealth(null);
       setHealthStatus("offline");
+    } finally {
+      signal?.removeEventListener("abort", onExternalAbort);
+      if (healthAbortControllerRef.current === controller) {
+        healthAbortControllerRef.current = null;
+      }
     }
   }, []);
 
@@ -219,22 +250,37 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
     }
 
     const savedSessions = loadMarketSessions();
-    setMarketSessions((prev) => {
-      const merged: Record<CountryCode, MarketWorkspaceSession> = {
-        EG: prev.EG.messages.length > 0 || prev.EG.sessionId || prev.EG.activeComparison ? prev.EG : savedSessions.EG,
-        SA: prev.SA.messages.length > 0 || prev.SA.sessionId || prev.SA.activeComparison ? prev.SA : savedSessions.SA,
-        AE: prev.AE.messages.length > 0 || prev.AE.sessionId || prev.AE.activeComparison ? prev.AE : savedSessions.AE,
-      };
-      return merged;
-    });
+    setMarketSessions((prev) => ({
+      EG:
+        prev.EG.messages.length > 0 || prev.EG.sessionId || prev.EG.activeComparison
+          ? prev.EG
+          : savedSessions.EG,
+      SA:
+        prev.SA.messages.length > 0 || prev.SA.sessionId || prev.SA.activeComparison
+          ? prev.SA
+          : savedSessions.SA,
+      AE:
+        prev.AE.messages.length > 0 || prev.AE.sessionId || prev.AE.activeComparison
+          ? prev.AE
+          : savedSessions.AE,
+    }));
+    setSessionsHydrated(true);
 
     const controller = new AbortController();
     void refreshMarkets(controller.signal);
     void refreshHealth(controller.signal);
     return () => {
       controller.abort();
+      healthAbortControllerRef.current?.abort();
     };
   }, [refreshHealth, refreshMarkets]);
+
+  useEffect(() => {
+    if (!sessionsHydrated) {
+      return;
+    }
+    saveMarketSessions(marketSessions);
+  }, [marketSessions, sessionsHydrated]);
 
   const setLanguage = useCallback((nextLanguage: UiLanguage) => {
     prefsMutatedBeforeHydrationRef.current = true;
@@ -289,12 +335,10 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
           payload.comparison !== undefined ? payload.comparison : existing.activeComparison,
       };
 
-      const nextSessions: Record<CountryCode, MarketWorkspaceSession> = {
+      return {
         ...prev,
         [targetCountry]: nextSession,
       };
-      saveMarketSessions(nextSessions);
-      return nextSessions;
     });
   }, []);
 
@@ -303,15 +347,13 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
       const resolvedCountry = targetCountry ?? countryRef.current;
       setMarketSessions((prev) => {
         const existing = prev[resolvedCountry];
-        const nextSessions: Record<CountryCode, MarketWorkspaceSession> = {
+        return {
           ...prev,
           [resolvedCountry]: {
             ...existing,
             activeComparison: comparison,
           },
         };
-        saveMarketSessions(nextSessions);
-        return nextSessions;
       });
     },
     [],
@@ -319,10 +361,9 @@ export function ShopSessionProvider({ children }: { children: ReactNode }) {
 
   const resetActiveMarketSession = useCallback(() => {
     const active = countryRef.current;
-    const cleared = clearMarketSession(active);
     setMarketSessions((prev) => ({
       ...prev,
-      [active]: cleared[active],
+      [active]: createEmptyMarketSession(),
     }));
     setSessionResetNonce((n) => n + 1);
   }, []);

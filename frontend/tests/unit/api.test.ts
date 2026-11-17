@@ -181,7 +181,8 @@ describe("api client (unit & edge)", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    const markets = await fetchMarkets();
+    const abortController = new AbortController();
+    const markets = await fetchMarkets(abortController.signal);
     const health = await fetchHealth();
     const chat = await sendChatTurn({
       message: "سماعة أنكر",
@@ -203,7 +204,7 @@ describe("api client (unit & edge)", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/v1/markets",
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET", signal: abortController.signal }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -295,6 +296,12 @@ describe("api client (unit & edge)", () => {
           status: 502,
           headers: { "Content-Type": "text/html", "X-Request-ID": "req-502" },
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response("not-valid-json", {
+          status: 200,
+          headers: { "Content-Type": "text/plain", "X-Request-ID": "req-bad-200" },
+        }),
       );
 
     vi.stubGlobal("fetch", fetchMock);
@@ -333,6 +340,14 @@ describe("api client (unit & edge)", () => {
       retriable: true,
       requestId: "req-502",
       details: null,
+    });
+
+    await expect(fetchMarkets()).rejects.toMatchObject({
+      name: "ApiClientError",
+      status: 200,
+      errorCode: "invalid_json",
+      retriable: false,
+      requestId: "req-bad-200",
     });
   });
 
