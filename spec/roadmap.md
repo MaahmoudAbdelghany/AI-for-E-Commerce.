@@ -26,8 +26,8 @@
 ## Phase 3 — Arabic-First (`RTL`) Next.js Web Experience
 **Goal**: Deliver a clean, responsive Arabic/English web interface where shoppers and enterprise stakeholders can converse with the assistant, switch countries/stores, and compare the Top 3 best-value products side by side.
 
-- [ ] **Feature 3.1**: `Next.js` TypeScript + Tailwind `RTL` application shell, market selector (`Egypt EGP`, `Saudi SAR`, `UAE AED`), store filter (`All`, `Noon`, `Amazon`), and typed API client (`frontend/package.json`, `frontend/src/app/`, `frontend/src/lib/api.ts`)
-- [ ] **Feature 3.2**: Interactive shopping chat experience, Top-3 comparison card grid (price, Bayesian rating badge, review count, value-score reason, direct store CTA), and degradation/empty states (`frontend/src/components/`)
+- [x] **Feature 3.1**: `Next.js` TypeScript + Tailwind `RTL` application shell, market selector (`Egypt EGP`, `Saudi SAR`, `UAE AED`), store filter (`All`, `Noon`, `Amazon`), and typed API client (`frontend/package.json`, `frontend/src/app/`, `frontend/src/lib/api.ts`)
+- [x] **Feature 3.2**: Interactive shopping chat experience, Top-3 comparison card grid (price, Bayesian rating badge, review count, value-score reason, direct store CTA), and degradation/empty states (`frontend/src/components/`)
 
 ---
 
