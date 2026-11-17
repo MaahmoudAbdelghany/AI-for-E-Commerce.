@@ -2,7 +2,7 @@
 
 - **Phase**: `phase-3-rtl-web-experience`
 - **Branch**: `phase/3-rtl-web-experience` (vs `main` at `d9cb3fd`)
-- **Status**: APPROVED (Phase Gate 2 approved by human on 2026-11-17)
+- **Status**: APPROVED (Phase Gate 2 approved by human on 2026-11-17; merged into `main` via `--no-ff` at `d2dce6e`)
 - **Commit range (`main..HEAD`)**: `89c7262..6512d52` (`6` local commits prior to Step 9 changelog/closeout; `53 files changed, 19674 insertions(+), 5 deletions(-)`)
 
 ## Chronological Commit History (`git log --oneline main..HEAD`)

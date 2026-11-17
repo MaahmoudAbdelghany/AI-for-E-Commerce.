@@ -3,7 +3,7 @@
 - **Phase branch**: `phase/3-rtl-web-experience`
 - **Roadmap section**: `spec/roadmap.md` → Phase 3
 - **Execution mode**: Phase mode (no sensitive areas from `spec/sdd-profile.md` are touched in Phase 3)
-- **Status**: Validated
+- **Status**: Merged
 
 ---
 
