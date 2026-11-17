@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --bg-page: #f7f8fa;
+  --bg-surface: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-subtle: #e2e8f0;
+  --accent-primary: #0f766e;
+  --accent-primary-hover: #115e59;
+  --font-sans-ar-en: "Segoe UI", "Tahoma", "Noto Sans Arabic", "Geeza Pro", "Arial", sans-serif;
+}
+
+html,
+body {
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-family: var(--font-sans-ar-en);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}

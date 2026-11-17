@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-301-rtl-shell-selectors-and-api-client/`
 - **Phase branch**: `phase/3-rtl-web-experience`
 - **Size**: Medium (4 cohesive execution groups spanning Next.js 15/Vitest toolchain & lockfile, strict TypeScript API contracts + runtime same-origin Route Handler proxies, bilingual dictionary/loss-free formatting/URL guard/isolated storage + `ShopSessionContext`, and Arabic-first RTL shell components + unit/integration tests)
-- **Status**: Approved
+- **Status**: Committed
 
 ---
 
