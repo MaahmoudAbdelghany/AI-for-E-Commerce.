@@ -23,7 +23,7 @@ Once Phase 3 is complete, shoppers in Egypt (`EGP`), Saudi Arabia (`SAR`), and t
 | Order | Roadmap ID | Folder | Size | Status | Depends on |
 |:---|:---|:---|:---|:---|:---|
 | 1 | Feature 3.1 | `spec/features/feature-301-rtl-shell-selectors-and-api-client/` | M | ✅ Done | Phase 2 (`Feature 2.3` REST API) |
-| 2 | Feature 3.2 | `spec/features/feature-302-chat-and-top3-comparison-experience/` | M | ⏳ Spec ready | Feature 3.1 |
+| 2 | Feature 3.2 | `spec/features/feature-302-chat-and-top3-comparison-experience/` | M | ✅ Done | Feature 3.1 |
 
 **Merge/split decisions made during the interview**: Keep separate **Feature 3.1 → Feature 3.2** per `spec/roadmap.md`, executed sequentially in **Phase mode**. Neither feature touches `backend/**` or any `spec/sdd-profile.md` Sensitive Area (`infra/aws/**`, `.github/workflows/**`, `backend/src/commerce_ai/config/security*`, `backend/migrations/**`).
 
@@ -211,3 +211,4 @@ Stop and ask the human if: a feature stays red after 2 fix attempts, or a fix ne
 | Feature | Subagent result | Validation | Local commit | Notes |
 |:---|:---|:---|:---|:---|
 | Feature 3.1 | ✅ Implemented (`impl-301`, `#21`) & verified (`verifier`, `#22`) | ✅ `npm.cmd --prefix frontend ci` clean, `15 passed (15)` across `4` Vitest files (`3.63s`), `eslint` & `tsc --noEmit` clean, offline `next build` `15.5.29` clean, `163 passed` backend `pytest -v`, `T7.1` full-stack HTTP smoke `200`/`404`/`503` | `feat(frontend): implement Feature 3.1 RTL shell, selectors, and typed API client` | `Next.js 15` + `Vitest` toolchain, `force-dynamic` runtime proxies (`/api/v1/[...path]`, `/api/health`), `src/lib/*` contracts/i18n/format/storage, `ShopSessionContext` (`EG`/`SA`/`AE` isolation), Arabic-first RTL `AppShell` & selectors (`INV-07` zero `next/font/google`) |
+| Feature 3.2 | ✅ Implemented (`impl-302`, `#26`) & verified (`verifier`, `#28`) | ✅ `16 passed (16)` targeted (`10.21s`), `31 passed (31)` across `6` Vitest files (`11.14s`), `eslint` & `tsc --noEmit` clean, offline `next build` `15.5.29` clean (`1871ms`), `163 passed` backend `pytest -v`, `T7.1` full-stack HTTP smoke `200`/`404`/`503` | `feat(frontend): implement Feature 3.2 chat and Top-3 comparison experience` | Unified dual-mode `ShoppingWorkspace` (Chat + `0`-LLM Direct Search), `StarterPrompts`, `Compare Saved Offers`, strictly grounded Top-3 `OfferCard` (`INV-03`/`05`/`09`), `TelemetryStrip`, accessible `StatusBanner` degradation (`INV-08`) |

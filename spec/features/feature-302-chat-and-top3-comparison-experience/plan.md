@@ -4,7 +4,7 @@
 - **Folder**: `spec/features/feature-302-chat-and-top3-comparison-experience/`
 - **Phase branch**: `phase/3-rtl-web-experience`
 - **Size**: Medium (4 cohesive execution groups spanning strictly grounded Top-3 card/telemetry/banner primitives, dual-mode chat and zero-LLM direct-search controls, unified workspace orchestration + `page.tsx` mounting, and offline Vitest + Testing Library unit/integration suites)
-- **Status**: Approved
+- **Status**: Committed
 
 ---
 
